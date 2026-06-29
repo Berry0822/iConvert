@@ -1,42 +1,41 @@
 # Auto-updates via your GitHub repo
 
-Your repo is ready: **https://github.com/Berry0822/iConvert** (Public, branch `main`),
-and the app is already pointed at it. You just need to put the files **into** the repo.
+Your repo: **https://github.com/Berry0822/iConvert** (Public, branch `main`).
+The app reads new versions through the GitHub API, so changes show up immediately.
+The version number lives in **version.txt** (one source of truth).
 
-## One-time: upload the files (drag & drop, ~2 minutes)
+## IMPORTANT — what to upload for a new version
 
-1. Open **https://github.com/Berry0822/iConvert** in your browser and sign in.
-2. Click **Add file → Upload files**.
-3. Open your unzipped **iConvert** folder, select **all** the files, and drag them
-   onto the page (file_converter.py, converters.py, version.txt, INSTALL.bat, etc.).
-4. Scroll down and click **Commit changes**.
+When I send you a new build, upload **all** the files and let them **overwrite**
+the ones in the repo — especially **file_converter.py** and **converters.py**,
+not just version.txt. (If the repo keeps an old file_converter.py, every update
+would pull that old program back. That was the earlier problem.)
 
-Done. Now open iConvert and click **Check for updates** — it should say
-**“You’re up to date.”** That confirms the app is talking to your repo. ✔
+For a *quick test* you can edit just version.txt — that's fine **as long as the
+repo already holds the latest program files.**
 
-## See an update actually happen (optional 30-second test)
+## Upload steps (~2 min)
 
-1. In the repo, click **version.txt → the pencil (Edit)**.
-2. Change `2.0.0` to `2.0.1` and click **Commit changes**.
-3. In iConvert, click **Check for updates** → it offers the update, downloads it,
-   and asks you to reopen. That’s the full auto-update working end to end.
+1. Open **https://github.com/Berry0822/iConvert** and sign in.
+2. **Add file -> Upload files**, drag in **every** file from the new folder,
+   then **Commit changes**. Confirm `file_converter.py` is in the list.
 
-## Releasing a new version later
+## Update your installed copy
 
-When I send you updated files:
-1. Repo → **Add file → Upload files** → drag the changed files in
-   (same filenames overwrite the old ones).
-2. Make sure **version.txt** has a higher number than before (e.g. `2.1.0`).
-3. **Commit changes.**
+- Double-click **UPDATE.bat** from the new folder, **or**
+- In the app, click **Check for updates** (it downloads + applies when the repo
+  is newer).
 
-Any iConvert on any PC will then offer the update on **Check for updates**.
+When app and repo match, **Check for updates** shows both numbers:
+> Installed version: 2.1.2
+> Latest in your repo: 2.1.2
+
+## See an update happen live (30-second test)
+
+1. In the repo: **version.txt -> pencil (Edit) -> change to `2.1.3` -> Commit**.
+2. In iConvert: **Check for updates** -> it offers 2.1.3, downloads, asks to reopen.
+3. Reopen -> it now shows **2.1.3** and stays there. (No more sliding back.)
 
 ## Notes
-- Keep the repo **Public** so the app can read updates without a login (yours is).
-- The in-app updater refreshes the app code (file_converter.py, converters.py,
-  version.txt). If a future version needs new Python packages, I’ll tell you to
-  run **INSTALL.bat** once.
-
-## No-GitHub option (still there)
-Don’t want to touch GitHub for a given update? Download the new files and
-double-click **UPDATE.bat** — it copies them straight into the installed app.
+- Keep the repo **Public**. Keep `version.txt` to just the number.
+- If a future build needs new Python packages, run **INSTALL.bat** once.

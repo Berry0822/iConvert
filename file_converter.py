@@ -29,7 +29,22 @@ from converters import route, unique_path, is_newer
 # Config
 # ----------------------------------------------------------------------------
 APP_NAME = "iConvert"
-APP_VERSION = "2.1.0"
+def _read_version():
+    # Single source of truth: the version lives in version.txt next to this file.
+    # (Keeping it out of the code means an update can never drag the number
+    # backwards or disagree with itself.)
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(base, "version.txt"), encoding="utf-8") as _f:
+            _v = _f.read().strip()
+        if _v:
+            return _v
+    except Exception:
+        pass
+    return "2.1.2"
+
+
+APP_VERSION = _read_version()
 
 # Set these after you create your GitHub repo (see GITHUB_SETUP.md).
 # Example: GITHUB_USER = "looxu"  ->  the in-app "Check for updates" will work.
@@ -44,18 +59,31 @@ def _raw_url(branch, fname):
         GITHUB_USER, GITHUB_REPO, branch, fname)
 
 
-def _http_get(url, timeout):
-    # Force a fresh copy - raw.githubusercontent.com is CDN-cached for a few
-    # minutes, which otherwise makes a just-pushed version look unchanged.
-    bust = "cb=%d_%d" % (int(time.time()), random.randint(0, 999999))
-    url = url + ("&" if "?" in url else "?") + bust
-    req = urllib.request.Request(url, headers={
-        "Cache-Control": "no-cache, no-store, max-age=0",
-        "Pragma": "no-cache",
-        "User-Agent": "iConvert-Updater",
-    })
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+def _gh_get(branch, path, timeout):
+    # Read a file from the repo, always fresh. The GitHub API is NOT served by
+    # the raw CDN (which caches for ~5 min), so a just-pushed change shows up
+    # immediately. Falls back to the raw URL (with a cache-buster) if the API
+    # is unavailable, e.g. rate-limited.
+    stamp = "%d_%d" % (int(time.time()), random.randint(0, 999999))
+    api = ("https://api.github.com/repos/{}/{}/contents/{}?ref={}&cb={}"
+           .format(GITHUB_USER, GITHUB_REPO, path, branch, stamp))
+    try:
+        req = urllib.request.Request(api, headers={
+            "Accept": "application/vnd.github.raw",
+            "Cache-Control": "no-cache",
+            "User-Agent": "iConvert-Updater",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except Exception:
+        url = _raw_url(branch, path) + "?cb=" + stamp
+        req = urllib.request.Request(url, headers={
+            "Cache-Control": "no-cache, no-store, max-age=0",
+            "Pragma": "no-cache",
+            "User-Agent": "iConvert-Updater",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
 
 # Optional drag-and-drop (works without it via the Select files button)
 try:
@@ -435,8 +463,7 @@ class App(BaseTk):
         last_err = ""
         for branch in GITHUB_BRANCHES:
             try:
-                remote = _http_get(_raw_url(branch, "version.txt"),
-                                   10).decode("utf-8").strip()
+                remote = _gh_get(branch, "version.txt", 10).decode("utf-8").strip()
                 branch_found = branch
                 break
             except Exception as e:
@@ -453,13 +480,14 @@ class App(BaseTk):
             self.q.put(("update", (remote, branch_found)))
         elif not silent:
             self.q.put(("info", ("You're up to date",
-                                 "Version %s is the latest." % APP_VERSION)))
+                                 "Installed version: %s\nLatest in your repo: %s"
+                                 % (APP_VERSION, remote))))
 
     def _do_update(self, remote, branch):
         try:
             base = os.path.dirname(os.path.abspath(__file__))
             for fname in UPDATE_FILES:
-                data = _http_get(_raw_url(branch, fname), 25)
+                data = _gh_get(branch, fname, 25)
                 with open(os.path.join(base, fname), "wb") as fh:
                     fh.write(data)
             messagebox.showinfo(APP_NAME,
