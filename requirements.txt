@@ -1,0 +1,7 @@
+pdf2docx
+PyMuPDF
+python-pptx
+Pillow
+pywin32
+tkinterdnd2
+customtkinter

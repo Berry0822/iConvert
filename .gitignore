@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.deps_installed
+dist/
+build/
+*.spec
