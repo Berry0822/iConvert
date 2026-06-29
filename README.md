@@ -1,4 +1,4 @@
-# iConvert — Local File Converter (v2.0)
+# iConvert — Local File Converter (v2.1)
 
 A modern, **tile-based** offline converter (inspired by iLovePDF). Pick a tool,
 drop your files, convert. Everything runs **on your laptop** — nothing is

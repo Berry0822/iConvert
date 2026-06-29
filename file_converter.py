@@ -15,6 +15,8 @@ import threading
 import queue
 import traceback
 import urllib.request
+import time
+import random
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -27,7 +29,7 @@ from converters import route, unique_path, is_newer
 # Config
 # ----------------------------------------------------------------------------
 APP_NAME = "iConvert"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 # Set these after you create your GitHub repo (see GITHUB_SETUP.md).
 # Example: GITHUB_USER = "looxu"  ->  the in-app "Check for updates" will work.
@@ -40,6 +42,20 @@ UPDATE_FILES = ("converters.py", "file_converter.py", "version.txt")
 def _raw_url(branch, fname):
     return "https://raw.githubusercontent.com/{}/{}/{}/{}".format(
         GITHUB_USER, GITHUB_REPO, branch, fname)
+
+
+def _http_get(url, timeout):
+    # Force a fresh copy - raw.githubusercontent.com is CDN-cached for a few
+    # minutes, which otherwise makes a just-pushed version look unchanged.
+    bust = "cb=%d_%d" % (int(time.time()), random.randint(0, 999999))
+    url = url + ("&" if "?" in url else "?") + bust
+    req = urllib.request.Request(url, headers={
+        "Cache-Control": "no-cache, no-store, max-age=0",
+        "Pragma": "no-cache",
+        "User-Agent": "iConvert-Updater",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
 
 # Optional drag-and-drop (works without it via the Select files button)
 try:
@@ -419,9 +435,8 @@ class App(BaseTk):
         last_err = ""
         for branch in GITHUB_BRANCHES:
             try:
-                with urllib.request.urlopen(_raw_url(branch, "version.txt"),
-                                            timeout=10) as r:
-                    remote = r.read().decode("utf-8").strip()
+                remote = _http_get(_raw_url(branch, "version.txt"),
+                                   10).decode("utf-8").strip()
                 branch_found = branch
                 break
             except Exception as e:
@@ -444,8 +459,7 @@ class App(BaseTk):
         try:
             base = os.path.dirname(os.path.abspath(__file__))
             for fname in UPDATE_FILES:
-                with urllib.request.urlopen(_raw_url(branch, fname), timeout=25) as r:
-                    data = r.read()
+                data = _http_get(_raw_url(branch, fname), 25)
                 with open(os.path.join(base, fname), "wb") as fh:
                     fh.write(data)
             messagebox.showinfo(APP_NAME,
