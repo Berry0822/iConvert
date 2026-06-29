@@ -1,88 +1,77 @@
-# iConvert — Local File Converter (v2.1)
+# iConvert — Local File Converter
 
-A modern, **tile-based** offline converter (inspired by iLovePDF). Pick a tool,
-drop your files, convert. Everything runs **on your laptop** — nothing is
-uploaded.
+iConvert is a simple desktop app for converting your everyday work files —
+PDFs, Word documents, PowerPoint slides, and images — right on your own
+computer. It has a clean, tile-based screen: pick a tool, add your files, and
+convert. Your files stay on your laptop.
 
-## Tools
+## What it can convert
 
-| Tile | Does |
-|------|------|
-| PDF to Word | PDF → editable .docx |
-| Word to PDF | .doc/.docx → PDF |
-| PowerPoint to PDF | .ppt/.pptx → PDF |
-| PDF to PowerPoint | PDF pages → .pptx slides |
+| Tool | Converts |
+|------|----------|
+| PDF to Word | PDF → editable Word (.docx) |
+| Word to PDF | Word (.doc/.docx) → PDF |
+| PowerPoint to PDF | PowerPoint (.ppt/.pptx) → PDF |
+| PDF to PowerPoint | PDF pages → PowerPoint slides |
 | JPG to PNG | .jpg → .png |
 | PNG to JPG | .png → .jpg |
 | Image to PDF | JPG/PNG → PDF |
 
-Word→PDF and PowerPoint→PDF use the **Microsoft Office** already on your PC for
-faithful layout. The rest use built-in libraries.
+## What you'll need
+
+- A Windows PC
+- Microsoft Office (for the Word and PowerPoint conversions)
+- Python — a quick one-time install in Step 1
 
 ---
 
-## Step 1 — Install Python (one time, ~5 min)
+## Step 1 — Install Python (one time, ~5 minutes)
 
-1. Open **https://www.python.org/downloads/** → **Download Python 3**.
-   *(Use python.org — not the Microsoft Store version.)*
+1. Go to **https://www.python.org/downloads/** and click **Download Python 3**. (Use python.org, not the Microsoft Store version.)
 2. Run the installer. On the **first screen, tick “Add python.exe to PATH.”**
-3. Click **Install Now**.
+3. Click **Install Now** and let it finish.
+
+You only do this once.
 
 ## Step 2 — Install iConvert
 
-1. Unzip this folder to a **short path** like `C:\iConvert` or your Downloads
-   folder *(deep folders can trigger a “path too long” error when unzipping)*.
-2. Double-click **`INSTALL.bat`**. Wait for **“DONE!”**
-3. Launch it: press the **Windows key**, type **iConvert** — or use the Desktop icon.
+1. Unzip the iConvert folder to a short location such as **`C:\iConvert`** or your **Downloads** folder.
+2. Double-click **`INSTALL.bat`** and wait until it says **“DONE!”**
+3. Open it any time: press the **Windows key** and type **iConvert**, or use the **iConvert** icon on your Desktop.
 
 ---
 
-## Updating later — two easy ways (no deleting needed)
+## How to use it
 
-- **In the app:** click **“Check for updates.”** Works once your GitHub repo is
-  set up — see **GITHUB_SETUP.md**.
-- **Or `UPDATE.bat`:** download the new files and double-click it; it copies them
-  into the installed app instantly. No GitHub required.
-
-You never have to uninstall first — both methods overwrite in place.
+1. Open iConvert and click a **tool** (for example, *PDF to Word*).
+2. **Drag your files in**, or click **Select files**.
+3. *(Optional)* Click **Output folder…** to choose where the results go — otherwise they’re saved next to your original files.
+4. Click **Convert**. A message confirms when it’s done.
 
 ---
 
-## Using it
+## Keeping it up to date
 
-1. Open iConvert and click a **tool tile** (e.g. *PDF to Word*).
-2. **Drag files in**, or click **Select files**.
-3. *(Optional)* **Output folder…** — otherwise files save next to the originals.
-4. Click **Convert**. A popup confirms when it’s done.
+When a new version is available you have two easy options, and you never need to uninstall first:
 
----
-
-## Troubleshooting
-
-- **“Python was not found” / Store opens** — real Python isn’t installed. Do
-  Step 1 (python.org, tick *Add to PATH*) and re-run `INSTALL.bat`.
-- **Word/PowerPoint conversions fail** — these need Microsoft Office installed
-  and working. Open Word/PowerPoint once to confirm.
-- **PDF→Word off on complex layouts** — text and simple tables convert well;
-  heavily designed PDFs may need light cleanup.
-- **“Check for updates” can’t reach the repo** — upload the files to your repo
-  (see **GITHUB_SETUP.md**), or just use `UPDATE.bat`.
+- Click **Check for updates** inside the app *(one-time setup in `GITHUB_SETUP.md`)*, or
+- Double-click **UPDATE.bat**.
 
 ---
 
-## What’s in this folder
+## If something doesn’t work
 
-- `file_converter.py` — the app window (modern UI + updater)
-- `converters.py` — the conversion engine
-- `INSTALL.bat` — installs the app + Start-menu/Desktop shortcuts
-- `UPDATE.bat` — one-click update (no GitHub)
-- `make_shortcuts.ps1` — helper used by INSTALL.bat
-- `UNINSTALL.bat` — removes the app + shortcuts
-- `requirements.txt` — Python packages it needs
-- `version.txt` — current version (used by the updater)
-- `GITHUB_SETUP.md` — how to set up auto-updates via GitHub
-- `icon.ico`, `make_icon.py` — app icon (+ the script that made it)
-- `.gitignore` — for the GitHub repo
+- **“Python was not found” appears, or the Microsoft Store opens** — Python isn’t installed yet. Do Step 1, then run **INSTALL.bat** again.
+- **Word or PowerPoint conversions don’t work** — make sure Microsoft Office is installed and opens normally.
+- **PDF to Word looks a little off** — plain text and simple tables convert cleanly; very fancy page layouts may need a small tidy-up afterward.
 
-Everything runs locally. Internet is only used for the one-time package install
-and the optional update check.
+---
+
+## The files in this folder
+
+- **INSTALL.bat** — installs iConvert (adds the Start-menu and Desktop shortcuts)
+- **UPDATE.bat** — updates iConvert to the newest version
+- **UNINSTALL.bat** — removes iConvert
+- **GITHUB_SETUP.md** — optional: set up the in-app “Check for updates” button
+
+Everything runs on your computer, and your files never leave your laptop.
