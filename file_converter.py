@@ -1,12 +1,7 @@
 """
 iConvert - Local File Converter (modern UI)
-===========================================
-A tile-based, offline desktop converter inspired by iLovePDF.
-Conversion logic lives in converters.py; this file is the window/UI + updater.
-
-Supported: PDF<->Word, PPT->PDF, PDF->PowerPoint, JPG<->PNG, image->PDF.
-Everything runs locally - no files leave your laptop (except the optional
-'Check for updates', which only contacts your own GitHub repo).
+A tile-based, offline converter. Conversion logic lives in converters.py;
+this file is the window/UI + the in-app updater.
 """
 
 import os
@@ -14,9 +9,9 @@ import sys
 import threading
 import queue
 import traceback
-import urllib.request
 import time
 import random
+import urllib.request
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -25,14 +20,9 @@ import customtkinter as ctk
 
 from converters import route, unique_path, is_newer
 
-# ----------------------------------------------------------------------------
-# Config
-# ----------------------------------------------------------------------------
-APP_NAME = "iConvert"
+
 def _read_version():
     # Single source of truth: the version lives in version.txt next to this file.
-    # (Keeping it out of the code means an update can never drag the number
-    # backwards or disagree with itself.)
     try:
         base = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(base, "version.txt"), encoding="utf-8") as _f:
@@ -41,17 +31,27 @@ def _read_version():
             return _v
     except Exception:
         pass
-    return "2.1.2"
+    return "2.2.0"
 
 
+APP_NAME = "iConvert"
 APP_VERSION = _read_version()
 
-# Set these after you create your GitHub repo (see GITHUB_SETUP.md).
-# Example: GITHUB_USER = "looxu"  ->  the in-app "Check for updates" will work.
 GITHUB_USER = "Berry0822"
 GITHUB_REPO = "iConvert"
-GITHUB_BRANCHES = ["main", "master"]   # tries each until one responds
+GITHUB_BRANCHES = ["main", "master"]
 UPDATE_FILES = ("converters.py", "file_converter.py", "version.txt")
+
+# palette
+ACCENT_RED = "#E5322D"
+GREEN = "#16A34A"
+RED = "#DC2626"
+AMBER = "#D97706"
+TEXT = "#111827"
+MUTED = "#6B7280"
+TRACK = "#E5E7EB"
+PAGE = "#F4F6FB"
+CARD = "#FFFFFF"
 
 
 def _raw_url(branch, fname):
@@ -60,10 +60,8 @@ def _raw_url(branch, fname):
 
 
 def _gh_get(branch, path, timeout):
-    # Read a file from the repo, always fresh. The GitHub API is NOT served by
-    # the raw CDN (which caches for ~5 min), so a just-pushed change shows up
-    # immediately. Falls back to the raw URL (with a cache-buster) if the API
-    # is unavailable, e.g. rate-limited.
+    # Always-fresh read: GitHub API is not served by the raw CDN, so a just-
+    # pushed change shows up immediately. Falls back to raw with a cache-buster.
     stamp = "%d_%d" % (int(time.time()), random.randint(0, 999999))
     api = ("https://api.github.com/repos/{}/{}/contents/{}?ref={}&cb={}"
            .format(GITHUB_USER, GITHUB_REPO, path, branch, stamp))
@@ -85,27 +83,7 @@ def _gh_get(branch, path, timeout):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
 
-# Optional drag-and-drop (works without it via the Select files button)
-try:
-    from tkinterdnd2 import TkinterDnD, DND_FILES
-    DND_AVAILABLE = True
-except Exception:
-    DND_AVAILABLE = False
 
-if DND_AVAILABLE:
-    class BaseTk(ctk.CTk, TkinterDnD.DnDWrapper):
-        def __init__(self, *a, **k):
-            super().__init__(*a, **k)
-            try:
-                self.TkdndVersion = TkinterDnD._require(self)
-            except Exception:
-                pass
-else:
-    BaseTk = ctk.CTk
-
-# ----------------------------------------------------------------------------
-# Conversions shown as tiles
-# ----------------------------------------------------------------------------
 CONVERSIONS = [
     dict(id="pdf2word", badge="PDF", color="#E5322D", title="PDF to Word",
          sub="Make PDFs into editable Word docs", src={"pdf"}, out="docx"),
@@ -124,15 +102,35 @@ CONVERSIONS = [
 ]
 COLS = 3
 
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    DND_AVAILABLE = True
+except Exception:
+    DND_AVAILABLE = False
+
+if DND_AVAILABLE:
+    class BaseTk(ctk.CTk, TkinterDnD.DnDWrapper):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+            except Exception:
+                pass
+else:
+    BaseTk = ctk.CTk
+
 
 def resource_path(rel):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, rel)
 
 
-# ----------------------------------------------------------------------------
-# App
-# ----------------------------------------------------------------------------
+def _darken(hexc, f=0.85):
+    hexc = hexc.lstrip("#")
+    r, g, b = (int(hexc[i:i+2], 16) for i in (0, 2, 4))
+    return "#%02x%02x%02x" % (int(r*f), int(g*f), int(b*f))
+
+
 class App(BaseTk):
     def __init__(self):
         super().__init__()
@@ -140,9 +138,9 @@ class App(BaseTk):
         ctk.set_default_color_theme("blue")
 
         self.title(APP_NAME + " - Local File Converter")
-        self.geometry("880x660")
-        self.minsize(780, 580)
-        self.configure(fg_color="#F4F6FB")
+        self.geometry("900x720")
+        self.minsize(820, 640)
+        self.configure(fg_color=PAGE)
         try:
             self.iconbitmap(resource_path("icon.ico"))
         except Exception:
@@ -150,57 +148,60 @@ class App(BaseTk):
 
         self.files = []
         self.output_dir = None
+        self.last_out_dir = None
         self.current = None
         self.working = False
         self.q = queue.Queue()
+
+        # progress animation state
+        self._disp = 0.0
+        self._target = 0.0
+        self._dot = 0
+        self._status_base = ""
+        self._has_progress = False
 
         self._build_header()
         self.body = ctk.CTkFrame(self, fg_color="transparent")
         self.body.pack(fill="both", expand=True)
         self._build_home()
-        self._build_conv_view()
+        self.conv_view = ctk.CTkFrame(self.body, fg_color="transparent")
         self.show_home()
 
         self.after(120, self._poll)
-        # quiet auto-check on launch (only prompts if a newer version exists)
-        self.after(800, lambda: self.check_for_updates(silent=True))
+        self.after(33, self._tick)
+        self.after(900, lambda: self.check_for_updates(silent=True))
 
     # ---------- header ----------
     def _build_header(self):
-        h = ctk.CTkFrame(self, height=64, corner_radius=0, fg_color="#FFFFFF")
+        h = ctk.CTkFrame(self, height=64, corner_radius=0, fg_color=CARD)
         h.pack(fill="x")
         h.pack_propagate(False)
         left = ctk.CTkFrame(h, fg_color="transparent")
         left.pack(side="left", padx=18)
         ctk.CTkLabel(left, text="i", width=34, height=34, corner_radius=9,
-                     fg_color="#E5322D", text_color="white",
+                     fg_color=ACCENT_RED, text_color="white",
                      font=ctk.CTkFont(size=20, weight="bold")).pack(side="left", pady=14)
-        ctk.CTkLabel(left, text="Convert", text_color="#111827",
+        ctk.CTkLabel(left, text="Convert", text_color=TEXT,
                      font=ctk.CTkFont(size=20, weight="bold")).pack(side="left", padx=(6, 0))
-
         right = ctk.CTkFrame(h, fg_color="transparent")
         right.pack(side="right", padx=16)
         ctk.CTkLabel(right, text="v" + APP_VERSION, text_color="#9CA3AF",
                      font=ctk.CTkFont(size=12)).pack(side="right", padx=(8, 4))
-        self.update_btn = ctk.CTkButton(right, text="Check for updates", width=140,
-                                        height=30, corner_radius=8,
-                                        fg_color="#EEF2FF", text_color="#3730A3",
-                                        hover_color="#E0E7FF",
-                                        command=lambda: self.check_for_updates(False))
-        self.update_btn.pack(side="right")
+        ctk.CTkButton(right, text="Check for updates", width=140, height=30,
+                      corner_radius=8, fg_color="#EEF2FF", text_color="#3730A3",
+                      hover_color="#E0E7FF",
+                      command=lambda: self.check_for_updates(False)).pack(side="right")
 
-    # ---------- home (tiles) ----------
+    # ---------- home ----------
     def _build_home(self):
         self.home = ctk.CTkFrame(self.body, fg_color="transparent")
-        title = ctk.CTkLabel(self.home, text="Every tool you need for your files",
-                             text_color="#111827",
-                             font=ctk.CTkFont(size=22, weight="bold"))
-        title.pack(anchor="w", padx=26, pady=(18, 0))
+        ctk.CTkLabel(self.home, text="Every tool you need for your files",
+                     text_color=TEXT, font=ctk.CTkFont(size=22, weight="bold")
+                     ).pack(anchor="w", padx=26, pady=(18, 0))
         ctk.CTkLabel(self.home,
                      text="100% offline on your laptop. Pick a tool to get started.",
-                     text_color="#6B7280", font=ctk.CTkFont(size=13)).pack(
-            anchor="w", padx=26, pady=(2, 8))
-
+                     text_color=MUTED, font=ctk.CTkFont(size=13)
+                     ).pack(anchor="w", padx=26, pady=(2, 8))
         grid = ctk.CTkScrollableFrame(self.home, fg_color="transparent")
         grid.pack(fill="both", expand=True, padx=18, pady=(0, 16))
         for c in range(COLS):
@@ -211,31 +212,25 @@ class App(BaseTk):
 
     def _make_tile(self, parent, conv):
         card = ctk.CTkFrame(parent, width=250, height=118, corner_radius=14,
-                            fg_color="#FFFFFF", border_width=1,
-                            border_color="#E5E7EB")
+                            fg_color=CARD, border_width=1, border_color=TRACK)
         card.grid_propagate(False)
         card.pack_propagate(False)
-
         badge = ctk.CTkLabel(card, text=conv["badge"], width=50, height=50,
                              corner_radius=12, fg_color=conv["color"],
                              text_color="white",
                              font=ctk.CTkFont(size=14, weight="bold"))
         badge.place(x=16, y=16)
-        title = ctk.CTkLabel(card, text=conv["title"], text_color="#111827",
-                             anchor="w", font=ctk.CTkFont(size=15, weight="bold"))
+        title = ctk.CTkLabel(card, text=conv["title"], text_color=TEXT, anchor="w",
+                             font=ctk.CTkFont(size=15, weight="bold"))
         title.place(x=78, y=22)
-        sub = ctk.CTkLabel(card, text=conv["sub"], text_color="#6B7280",
-                           anchor="w", justify="left", wraplength=150,
+        sub = ctk.CTkLabel(card, text=conv["sub"], text_color=MUTED, anchor="w",
+                           justify="left", wraplength=150,
                            font=ctk.CTkFont(size=11))
         sub.place(x=78, y=48)
 
-        def on_enter(_e):
-            card.configure(border_color=conv["color"], border_width=2)
-        def on_leave(_e):
-            card.configure(border_color="#E5E7EB", border_width=1)
-        def on_click(_e):
-            self.show_conversion(conv)
-
+        def on_enter(_e): card.configure(border_color=conv["color"], border_width=2)
+        def on_leave(_e): card.configure(border_color=TRACK, border_width=1)
+        def on_click(_e): self.show_conversion(conv)
         for w in (card, badge, title, sub):
             w.bind("<Enter>", on_enter)
             w.bind("<Leave>", on_leave)
@@ -246,46 +241,46 @@ class App(BaseTk):
                 pass
         return card
 
-    # ---------- conversion view ----------
-    def _build_conv_view(self):
-        self.conv_view = ctk.CTkFrame(self.body, fg_color="transparent")
+    # ---------- view switch ----------
+    def show_home(self):
+        self._has_progress = False
+        self.conv_view.pack_forget()
+        self.home.pack(fill="both", expand=True)
 
     def _clear(self, frame):
         for ch in frame.winfo_children():
             ch.destroy()
 
-    def show_home(self):
-        self.conv_view.pack_forget()
-        self.home.pack(fill="both", expand=True)
-
     def show_conversion(self, conv):
         self.current = conv
         self.files = []
         self.output_dir = None
+        self.last_out_dir = None
+        accent = conv["color"]
         self.home.pack_forget()
         self._clear(self.conv_view)
         self.conv_view.pack(fill="both", expand=True)
 
         top = ctk.CTkFrame(self.conv_view, fg_color="transparent")
-        top.pack(fill="x", padx=22, pady=(16, 6))
+        top.pack(fill="x", padx=22, pady=(14, 4))
         ctk.CTkButton(top, text="< Back", width=70, height=30, corner_radius=8,
                       fg_color="#F3F4F6", text_color="#374151",
                       hover_color="#E5E7EB", command=self.show_home).pack(side="left")
-        ctk.CTkLabel(top, text="   " + conv["title"], text_color="#111827",
+        ctk.CTkLabel(top, text="  " + conv["badge"], width=44, height=30,
+                     corner_radius=8, fg_color=accent, text_color="white",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(side="left", padx=(10, 8))
+        ctk.CTkLabel(top, text=conv["title"], text_color=TEXT,
                      font=ctk.CTkFont(size=20, weight="bold")).pack(side="left")
 
-        # drop / select area
-        drop = ctk.CTkFrame(self.conv_view, height=120, corner_radius=14,
-                            fg_color="#FFFFFF", border_width=2,
-                            border_color="#DBE3FF")
+        drop = ctk.CTkFrame(self.conv_view, height=104, corner_radius=14,
+                            fg_color=CARD, border_width=2, border_color="#DBE3FF")
         drop.pack(fill="x", padx=22, pady=8)
         drop.pack_propagate(False)
-        msg = ("Drag files here, or" if DND_AVAILABLE else "Add the files you want to convert")
-        ctk.CTkLabel(drop, text=msg, text_color="#6B7280",
-                     font=ctk.CTkFont(size=14)).pack(pady=(24, 6))
-        ctk.CTkButton(drop, text="Select files", width=150, height=38,
-                      corner_radius=9, fg_color=conv["color"],
-                      hover_color=self._darken(conv["color"]),
+        msg = ("Drag files here, or" if DND_AVAILABLE else "Add the files to convert")
+        ctk.CTkLabel(drop, text=msg, text_color=MUTED,
+                     font=ctk.CTkFont(size=14)).pack(pady=(20, 6))
+        ctk.CTkButton(drop, text="Select files", width=150, height=38, corner_radius=9,
+                      fg_color=accent, hover_color=_darken(accent),
                       font=ctk.CTkFont(size=14, weight="bold"),
                       command=self._add_files).pack()
         if DND_AVAILABLE:
@@ -295,25 +290,23 @@ class App(BaseTk):
             except Exception:
                 pass
 
-        # file list
         row = ctk.CTkFrame(self.conv_view, fg_color="transparent")
-        row.pack(fill="x", padx=22, pady=(4, 0))
+        row.pack(fill="x", padx=22, pady=(2, 0))
         ctk.CTkLabel(row, text="Files", text_color="#374151",
                      font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
         ctk.CTkButton(row, text="Clear", width=64, height=26, corner_radius=7,
                       fg_color="#F3F4F6", text_color="#374151",
                       hover_color="#E5E7EB", command=self._clear_files).pack(side="right")
-        self.files_box = ctk.CTkTextbox(self.conv_view, height=96, corner_radius=10,
-                                        fg_color="#FFFFFF", text_color="#111827",
-                                        border_width=1, border_color="#E5E7EB")
-        self.files_box.pack(fill="x", padx=22, pady=(4, 6))
+        self.files_box = ctk.CTkTextbox(self.conv_view, height=64, corner_radius=10,
+                                        fg_color=CARD, text_color=TEXT,
+                                        border_width=1, border_color=TRACK)
+        self.files_box.pack(fill="x", padx=22, pady=(4, 4))
         self.files_box.configure(state="disabled")
 
-        # output + convert
         out = ctk.CTkFrame(self.conv_view, fg_color="transparent")
-        out.pack(fill="x", padx=22, pady=(2, 4))
+        out.pack(fill="x", padx=22, pady=(2, 2))
         self.out_lbl = ctk.CTkLabel(out, text="Saved beside each original",
-                                    text_color="#6B7280", font=ctk.CTkFont(size=12))
+                                    text_color=MUTED, font=ctk.CTkFont(size=12))
         self.out_lbl.pack(side="left")
         ctk.CTkButton(out, text="Output folder...", width=130, height=28,
                       corner_radius=8, fg_color="#F3F4F6", text_color="#374151",
@@ -321,28 +314,41 @@ class App(BaseTk):
 
         self.convert_btn = ctk.CTkButton(
             self.conv_view, text="Convert", height=44, corner_radius=10,
-            fg_color=conv["color"], hover_color=self._darken(conv["color"]),
+            fg_color=accent, hover_color=_darken(accent),
             font=ctk.CTkFont(size=16, weight="bold"), command=self._start)
-        self.convert_btn.pack(fill="x", padx=22, pady=(6, 6))
+        self.convert_btn.pack(fill="x", padx=22, pady=(6, 8))
 
-        self.progress = ctk.CTkProgressBar(self.conv_view, height=10)
+        # progress block
+        prow = ctk.CTkFrame(self.conv_view, fg_color="transparent")
+        prow.pack(fill="x", padx=22)
+        self.status_lbl = ctk.CTkLabel(prow, text="Ready to convert",
+                                       text_color=MUTED, font=ctk.CTkFont(size=13))
+        self.status_lbl.pack(side="left")
+        self.pct_lbl = ctk.CTkLabel(prow, text="0%", text_color=accent,
+                                    font=ctk.CTkFont(size=22, weight="bold"))
+        self.pct_lbl.pack(side="right")
+        self.progress = ctk.CTkProgressBar(self.conv_view, height=14, corner_radius=7,
+                                           fg_color=TRACK, progress_color=accent)
         self.progress.set(0)
-        self.progress.pack(fill="x", padx=22, pady=(0, 6))
-        self.log = ctk.CTkTextbox(self.conv_view, height=120, corner_radius=10,
-                                  fg_color="#0F172A", text_color="#E2E8F0",
-                                  font=ctk.CTkFont(family="Consolas", size=12))
-        self.log.pack(fill="both", expand=True, padx=22, pady=(0, 16))
-        self.log.configure(state="disabled")
-        self._log("Ready. Add %s file(s) to convert to %s." % (
-            "/".join(sorted(conv["src"])).upper(), conv["out"].upper()))
+        self.progress.pack(fill="x", padx=22, pady=(4, 8))
+        self._disp = 0.0
+        self._target = 0.0
+        self._has_progress = True
 
-    # ---------- helpers ----------
-    @staticmethod
-    def _darken(hexc, f=0.85):
-        hexc = hexc.lstrip("#")
-        r, g, b = (int(hexc[i:i+2], 16) for i in (0, 2, 4))
-        return "#%02x%02x%02x" % (int(r*f), int(g*f), int(b*f))
+        self.results = ctk.CTkScrollableFrame(self.conv_view, fg_color=CARD,
+                                              corner_radius=10, label_text="Results",
+                                              label_text_color=MUTED)
+        self.results.pack(fill="both", expand=True, padx=22, pady=(0, 6))
 
+        self.open_btn = ctk.CTkButton(self.conv_view, text="Open output folder",
+                                      height=34, corner_radius=9, fg_color=GREEN,
+                                      hover_color=_darken(GREEN),
+                                      command=self._open_output)
+        # shown only after a successful run
+        self.open_btn.pack(fill="x", padx=22, pady=(0, 14))
+        self.open_btn.pack_forget()
+
+    # ---------- files ----------
     def _add_paths(self, paths):
         conv = self.current
         added = 0
@@ -352,14 +358,10 @@ class App(BaseTk):
                 continue
             ext = os.path.splitext(p)[1].lstrip(".").lower()
             if ext not in conv["src"]:
-                self._log("Skipped (not %s): %s" % (
-                    "/".join(sorted(conv["src"])).upper(), os.path.basename(p)))
                 continue
             if p not in self.files:
                 self.files.append(p)
                 added += 1
-        if added:
-            self._log("Added %d file(s)." % added)
         self._refresh_files()
 
     def _on_drop(self, event):
@@ -369,21 +371,23 @@ class App(BaseTk):
         conv = self.current
         exts = " ".join("*." + e for e in sorted(conv["src"]))
         paths = filedialog.askopenfilenames(
-            title="Choose files", filetypes=[(conv["title"] + " input", exts),
-                                             ("All files", "*.*")])
+            title="Choose files",
+            filetypes=[(conv["title"] + " input", exts), ("All files", "*.*")])
         if paths:
             self._add_paths(paths)
 
     def _clear_files(self):
         self.files = []
         self._refresh_files()
-        self._log("Cleared file list.")
 
     def _refresh_files(self):
         self.files_box.configure(state="normal")
         self.files_box.delete("1.0", "end")
-        for f in self.files:
-            self.files_box.insert("end", "  " + os.path.basename(f) + "\n")
+        if self.files:
+            for f in self.files:
+                self.files_box.insert("end", "  " + os.path.basename(f) + "\n")
+        else:
+            self.files_box.insert("end", "  No files added yet.\n")
         self.files_box.configure(state="disabled")
 
     def _choose_output(self):
@@ -412,9 +416,14 @@ class App(BaseTk):
         if not jobs:
             messagebox.showinfo(APP_NAME, "Nothing to convert.")
             return
+        self._clear(self.results)
+        self.open_btn.pack_forget()
+        self._disp = 0.0
+        self._target = 0.0
+        self.progress.set(0)
+        self.pct_lbl.configure(text="0%")
         self.working = True
         self.convert_btn.configure(state="disabled", text="Converting...")
-        self.progress.set(0)
         threading.Thread(target=self._worker, args=(jobs,), daemon=True).start()
 
     def _worker(self, jobs):
@@ -428,24 +437,57 @@ class App(BaseTk):
         ok = 0
         total = len(jobs)
         for i, (src, fn, out_ext) in enumerate(jobs, start=1):
-            self.q.put(("log", "[%d/%d] %s ..." % (i, total, os.path.basename(src))))
+            self.q.put(("start", (i, total, os.path.basename(src))))
             try:
                 base = os.path.splitext(os.path.basename(src))[0]
                 folder = self.output_dir or os.path.dirname(src)
                 dst = unique_path(os.path.join(folder, base + "." + out_ext))
                 fn(src, dst)
                 ok += 1
-                self.q.put(("log", "    -> " + os.path.basename(dst)))
+                self.last_out_dir = folder
+                self.q.put(("result", (True, os.path.basename(src), os.path.basename(dst))))
             except Exception as e:
-                self.q.put(("log", "    ERROR: " + str(e)))
+                self.q.put(("result", (False, os.path.basename(src), str(e)[:60])))
                 sys.stderr.write(traceback.format_exc() + "\n")
-            self.q.put(("progress", i / total))
+            self.q.put(("doneone", (i, total)))
         if com:
             try:
                 pythoncom.CoUninitialize()
             except Exception:
                 pass
-        self.q.put(("done", (ok, total)))
+        self.q.put(("alldone", (ok, total)))
+
+    def _add_result(self, ok, left, right):
+        rowf = ctk.CTkFrame(self.results, fg_color="transparent")
+        rowf.pack(fill="x", padx=4, pady=2)
+        ctk.CTkLabel(rowf, text="●", width=14,
+                     text_color=GREEN if ok else RED,
+                     font=ctk.CTkFont(size=14)).pack(side="left")
+        if ok:
+            txt = left + "   →   " + right
+            col = "#374151"
+        else:
+            txt = left + "  -  failed: " + right
+            col = RED
+        ctk.CTkLabel(rowf, text=txt, text_color=col, anchor="w",
+                     font=ctk.CTkFont(size=12)).pack(side="left", padx=4)
+
+    # ---------- progress animation ----------
+    def _tick(self):
+        if self._has_progress and self.current:
+            try:
+                self._disp += (self._target - self._disp) * 0.18
+                if self._target - self._disp < 0.002:
+                    self._disp = self._target
+                self.progress.set(self._disp)
+                self.pct_lbl.configure(text="%d%%" % int(round(self._disp * 100)))
+                if self.working:
+                    self._dot = (self._dot + 1) % 48
+                    self.status_lbl.configure(
+                        text=self._status_base + "." * (1 + (self._dot // 12)))
+            except Exception:
+                pass
+        self.after(33, self._tick)
 
     # ---------- updates ----------
     def check_for_updates(self, silent=False):
@@ -497,15 +539,42 @@ class App(BaseTk):
         except Exception as e:
             messagebox.showerror(APP_NAME, "Update failed: %s" % e)
 
+    def _open_output(self):
+        d = self.last_out_dir or self.output_dir
+        if d and os.path.isdir(d):
+            try:
+                os.startfile(d)
+            except Exception:
+                messagebox.showinfo(APP_NAME, "Files saved in:\n" + d)
+
     # ---------- queue pump ----------
     def _poll(self):
         try:
             while True:
                 kind, payload = self.q.get_nowait()
-                if kind == "log":
-                    self._log(payload)
-                elif kind == "progress":
-                    self.progress.set(payload)
+                if kind == "start":
+                    i, total, name = payload
+                    self._status_base = "Converting %s" % name
+                    self._target = (i - 1 + 0.85) / total
+                elif kind == "doneone":
+                    i, total = payload
+                    self._target = i / total
+                elif kind == "result":
+                    ok, left, right = payload
+                    self._add_result(ok, left, right)
+                elif kind == "alldone":
+                    ok, total = payload
+                    self.working = False
+                    self._target = 1.0
+                    self.convert_btn.configure(state="normal", text="Convert")
+                    if ok == total:
+                        self._status_base = "Done - %d of %d converted" % (ok, total)
+                        self.status_lbl.configure(text=self._status_base, text_color=GREEN)
+                    else:
+                        self._status_base = "Finished - %d of %d converted" % (ok, total)
+                        self.status_lbl.configure(text=self._status_base, text_color=AMBER)
+                    if ok:
+                        self.open_btn.pack(fill="x", padx=22, pady=(0, 14))
                 elif kind == "info":
                     messagebox.showinfo(payload[0], payload[1])
                 elif kind == "update":
@@ -515,28 +584,9 @@ class App(BaseTk):
                             "Version %s is available (you have %s).\nUpdate now?"
                             % (remote, APP_VERSION)):
                         self._do_update(remote, branch)
-                elif kind == "done":
-                    ok, total = payload
-                    self.working = False
-                    self.convert_btn.configure(state="normal", text="Convert")
-                    self._log("Finished: %d/%d converted." % (ok, total))
-                    if ok:
-                        where = self.output_dir or "the same folder as each original"
-                        messagebox.showinfo(APP_NAME,
-                                            "Done! %d of %d file(s) converted.\n\n"
-                                            "Saved to: %s" % (ok, total, where))
-                    else:
-                        messagebox.showwarning(APP_NAME,
-                                               "No files were converted. See the log.")
         except queue.Empty:
             pass
         self.after(120, self._poll)
-
-    def _log(self, text):
-        self.log.configure(state="normal")
-        self.log.insert("end", text + "\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
 
 
 def main():
