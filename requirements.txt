@@ -5,3 +5,5 @@ Pillow
 pywin32
 tkinterdnd2
 customtkinter
+openpyxl
+pytesseract

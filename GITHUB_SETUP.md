@@ -27,14 +27,14 @@ repo already holds the latest program files.**
   is newer).
 
 When app and repo match, **Check for updates** shows both numbers:
-> Installed version: 2.1.2
-> Latest in your repo: 2.1.2
+> Installed version: 3.0.0
+> Latest in your repo: 3.0.0
 
 ## See an update happen live (30-second test)
 
-1. In the repo: **version.txt -> pencil (Edit) -> change to `2.1.3` -> Commit**.
-2. In iConvert: **Check for updates** -> it offers 2.1.3, downloads, asks to reopen.
-3. Reopen -> it now shows **2.1.3** and stays there. (No more sliding back.)
+1. In the repo: **version.txt -> pencil (Edit) -> change to `3.0.1` -> Commit**.
+2. In iConvert: **Check for updates** -> it offers 3.0.1, downloads, asks to reopen.
+3. Reopen -> it now shows **3.0.1** and stays there. (No more sliding back.)
 
 ## Notes
 - Keep the repo **Public**. Keep `version.txt` to just the number.

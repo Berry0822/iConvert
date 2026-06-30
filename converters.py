@@ -170,3 +170,244 @@ def parse_version(s):
 def is_newer(remote, local):
     """True if remote version string is strictly newer than local."""
     return parse_version(remote) > parse_version(local)
+
+
+# ===========================================================================
+# v3 tools: batch, PDF merge/split/compress, PDF->images, Excel, password, OCR
+# ===========================================================================
+
+def gather_files(paths, exts):
+    """Expand a mix of files/folders into a flat list of matching files."""
+    exts = {e.lower().lstrip(".") for e in exts}
+    found = []
+    for p in paths:
+        if os.path.isdir(p):
+            for root, _dirs, files in os.walk(p):
+                for fn in files:
+                    if "." in fn and fn.rsplit(".", 1)[-1].lower() in exts:
+                        found.append(os.path.join(root, fn))
+        elif os.path.isfile(p):
+            if "." in p and p.rsplit(".", 1)[-1].lower() in exts:
+                found.append(p)
+    return found
+
+
+def pdf_merge(srcs, dst):
+    import fitz
+    out = fitz.open()
+    try:
+        for s in srcs:
+            d = fitz.open(s)
+            out.insert_pdf(d)
+            d.close()
+        out.save(dst)
+    finally:
+        out.close()
+    return dst
+
+
+def _parse_pages(spec, n):
+    """'1-3,5,8-' -> sorted unique 0-based indices within [0,n). None if blank."""
+    spec = (spec or "").strip()
+    if not spec:
+        return None
+    out = []
+    for part in spec.replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            start = int(a) if a else 1
+            end = int(b) if b else n
+            for p in range(start, end + 1):
+                if 1 <= p <= n:
+                    out.append(p - 1)
+        else:
+            p = int(part)
+            if 1 <= p <= n:
+                out.append(p - 1)
+    seen, res = set(), []
+    for i in out:
+        if i not in seen:
+            seen.add(i)
+            res.append(i)
+    return res
+
+
+def pdf_split(src, out_dir, base, pages_spec):
+    import fitz
+    doc = fitz.open(src)
+    n = doc.page_count
+    outputs = []
+    try:
+        idxs = _parse_pages(pages_spec, n)
+        if idxs is None:
+            for i in range(n):
+                w = fitz.open()
+                w.insert_pdf(doc, from_page=i, to_page=i)
+                p = unique_path(os.path.join(out_dir, "%s_p%d.pdf" % (base, i + 1)))
+                w.save(p)
+                w.close()
+                outputs.append(p)
+        else:
+            if not idxs:
+                raise ValueError("no valid pages in '%s'" % pages_spec)
+            w = fitz.open()
+            for i in idxs:
+                w.insert_pdf(doc, from_page=i, to_page=i)
+            p = unique_path(os.path.join(out_dir, "%s_selected.pdf" % base))
+            w.save(p)
+            w.close()
+            outputs.append(p)
+    finally:
+        doc.close()
+    return outputs
+
+
+def pdf_compress(src, dst):
+    import fitz
+    doc = fitz.open(src)
+    try:
+        doc.save(dst, garbage=4, deflate=True, clean=True)
+    finally:
+        doc.close()
+    return dst
+
+
+def pdf_to_images(src, out_dir, base, fmt, dpi=150):
+    import fitz
+    ext = "jpg" if str(fmt).lower() in ("jpg", "jpeg") else "png"
+    doc = fitz.open(src)
+    outputs = []
+    mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+    try:
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(matrix=mat)  # alpha=False by default
+            p = unique_path(os.path.join(out_dir, "%s_p%d.%s" % (base, i + 1, ext)))
+            pix.save(p)
+            outputs.append(p)
+    finally:
+        doc.close()
+    return outputs
+
+
+def excel_to_pdf(src, dst):
+    import win32com.client
+    excel = win32com.client.Dispatch("Excel.Application")
+    excel.Visible = False
+    excel.DisplayAlerts = False
+    try:
+        wb = excel.Workbooks.Open(src, ReadOnly=True)
+        wb.ExportAsFixedFormat(0, dst)  # 0 = xlTypePDF
+        wb.Close(False)
+    finally:
+        excel.Quit()
+    return dst
+
+
+def excel_to_csv(src, out_dir, base):
+    import openpyxl
+    import csv
+    wb = openpyxl.load_workbook(src, read_only=True, data_only=True)
+    outputs = []
+    names = wb.sheetnames
+    try:
+        for name in names:
+            ws = wb[name]
+            if len(names) == 1:
+                p = unique_path(os.path.join(out_dir, base + ".csv"))
+            else:
+                safe = "".join(c if (c.isalnum() or c in " -_") else "_" for c in name)
+                p = unique_path(os.path.join(out_dir, "%s_%s.csv" % (base, safe)))
+            with open(p, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                for row in ws.iter_rows(values_only=True):
+                    w.writerow(["" if c is None else c for c in row])
+            outputs.append(p)
+    finally:
+        wb.close()
+    return outputs
+
+
+def pdf_encrypt(src, dst, password):
+    import fitz
+    if not password:
+        raise ValueError("password is empty")
+    doc = fitz.open(src)
+    try:
+        perm = int(fitz.PDF_PERM_ACCESSIBILITY | fitz.PDF_PERM_PRINT |
+                   fitz.PDF_PERM_COPY | fitz.PDF_PERM_ANNOTATE)
+        doc.save(dst, encryption=fitz.PDF_ENCRYPT_AES_256,
+                 owner_pw=password, user_pw=password, permissions=perm)
+    finally:
+        doc.close()
+    return dst
+
+
+def pdf_decrypt(src, dst, password):
+    import fitz
+    doc = fitz.open(src)
+    try:
+        if doc.needs_pass:
+            if not doc.authenticate(password or ""):
+                raise ValueError("wrong password")
+        doc.save(dst, encryption=fitz.PDF_ENCRYPT_NONE)
+    finally:
+        doc.close()
+    return dst
+
+
+def tesseract_ok():
+    try:
+        import pytesseract
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
+
+
+def pdf_ocr(src, dst, dpi=200):
+    import io
+    import fitz
+    import pytesseract
+    from PIL import Image
+    doc = fitz.open(src)
+    out = fitz.open()
+    mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+    try:
+        for page in doc:
+            pix = page.get_pixmap(matrix=mat)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            data = pytesseract.image_to_pdf_or_hocr(img, extension="pdf")
+            sub = fitz.open("pdf", data)
+            out.insert_pdf(sub)
+            sub.close()
+        out.save(dst)
+    finally:
+        out.close()
+        doc.close()
+    return dst
+
+
+def pdf_ocr_to_word(src, dst, dpi=200):
+    import io
+    import fitz
+    import pytesseract
+    from PIL import Image
+    from docx import Document
+    doc = fitz.open(src)
+    out = Document()
+    mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+    try:
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(matrix=mat)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            text = pytesseract.image_to_string(img)
+            if i > 0:
+                out.add_page_break()
+            for line in text.splitlines():
+                out.add_paragraph(line)
+    finally:
+        doc.close()
+    out.save(dst)
+    return dst
