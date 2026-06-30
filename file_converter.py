@@ -13,6 +13,7 @@ import traceback
 import time
 import random
 import urllib.request
+import webbrowser
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -39,7 +40,7 @@ def _read_version():
             return v
     except Exception:
         pass
-    return "3.0.0"
+    return "3.1.0"
 
 
 APP_VERSION = _read_version()
@@ -48,6 +49,7 @@ GITHUB_USER = "Berry0822"
 GITHUB_REPO = "iConvert"
 GITHUB_BRANCHES = ["main", "master"]
 UPDATE_FILES = ("converters.py", "file_converter.py", "version.txt")
+GUIDE_URL = "https://github.com/%s/%s#readme" % (GITHUB_USER, GITHUB_REPO)
 
 # --- palette (light, dark) tuples so dark mode just works ---
 PAGE = ("#F4F6FB", "#0F172A")
@@ -247,7 +249,7 @@ class App(BaseTk):
         self.current = None
         self.working = False
         self.q = queue.Queue()
-        self._toasts = []
+        self._toast_wins = []
 
         # progress animation state
         self._disp = 0.0
@@ -681,56 +683,128 @@ class App(BaseTk):
         ctk.CTkLabel(rowf, text=txt, text_color=col, anchor="w",
                      font=ctk.CTkFont(size=12)).pack(side="left", padx=4)
 
-    # ---------- toasts ----------
-    def show_toast(self, text, kind="info"):
+    # ---------- toasts (top-right mini-windows with real fade in/out) ----------
+    def show_toast(self, text, kind="info", link=None):
         cmap = {"success": GREEN, "error": RED, "warn": AMBER, "info": BLUE}
         c = cmap.get(kind, BLUE)
-        f = ctk.CTkFrame(self, width=320, height=54, corner_radius=10, fg_color=CARD,
-                         border_width=2, border_color=c)
-        f.pack_propagate(False)
-        bar = ctk.CTkFrame(f, width=6, fg_color=c, corner_radius=3)
-        bar.pack(side="left", fill="y", padx=(8, 8), pady=8)
-        ctk.CTkLabel(f, text=text, text_color=TEXT, wraplength=260, justify="left",
-                     font=ctk.CTkFont(size=12)).pack(side="left", fill="both",
-                                                     expand=True, pady=6, padx=(0, 8))
-        f.bind("<Button-1>", lambda _e, fr=f: self._remove_toast(fr))
-        self._toasts.append(f)
-        self._reposition_toasts()
-        self.after(3400, lambda fr=f: self._remove_toast(fr))
-
-    def _reposition_toasts(self):
-        y = 76
-        for t in self._toasts:
+        if link is None and kind == "error":
+            link = GUIDE_URL
+        dark = ctk.get_appearance_mode() == "Dark"
+        bg = "#1E293B" if dark else "#FFFFFF"
+        fg = "#F1F5F9" if dark else "#111827"
+        linkfg = "#93C5FD" if dark else "#1D4ED8"
+        try:
+            win = tk.Toplevel(self)
+            win.overrideredirect(True)
+            win.attributes("-topmost", True)
             try:
-                t.place(relx=1.0, x=-16, y=y, anchor="ne")
-                y += 62
+                win.attributes("-alpha", 0.0)
+            except Exception:
+                pass
+            win.configure(bg=c)
+        except Exception:
+            return
+        inner = tk.Frame(win, bg=bg)
+        inner.pack(fill="both", expand=True, padx=2, pady=2)
+        tk.Frame(inner, bg=c, width=6).pack(side="left", fill="y")
+        bodyf = tk.Frame(inner, bg=bg)
+        bodyf.pack(side="left", fill="both", expand=True, padx=10, pady=8)
+        tk.Label(bodyf, text=text, bg=bg, fg=fg, justify="left", wraplength=260,
+                 font=("Segoe UI", 10)).pack(anchor="w")
+        if link:
+            tk.Label(bodyf, text="Click here to open the guide", bg=bg, fg=linkfg,
+                     cursor="hand2", font=("Segoe UI", 9, "underline")).pack(anchor="w", pady=(4, 0))
+
+        def dismiss(_e=None):
+            self._fade_out(win)
+
+        def openlink(_e=None):
+            try:
+                webbrowser.open(link)
+            except Exception:
+                pass
+            self._fade_out(win)
+
+        handler = openlink if link else dismiss
+        for w in (win, inner, bodyf):
+            w.bind("<Button-1>", handler)
+        for ch in bodyf.winfo_children():
+            ch.bind("<Button-1>", handler)
+        win._alpha = 0.0
+        win._goal = 0.96
+        self._toast_wins.append(win)
+        self._place_toasts()
+        self._fade_in(win)
+        win.after(6000 if link else 3400, lambda: self._fade_out(win))
+
+    def _place_toasts(self):
+        try:
+            self.update_idletasks()
+            base_x = self.winfo_rootx() + self.winfo_width() - 20
+            y = self.winfo_rooty() + 72
+        except Exception:
+            return
+        for win in list(self._toast_wins):
+            try:
+                win.update_idletasks()
+                w = max(win.winfo_reqwidth(), 300)
+                h = win.winfo_reqheight()
+                win.geometry("%dx%d+%d+%d" % (w, h, base_x - w, y))
+                y += h + 10
             except Exception:
                 pass
 
-    def _remove_toast(self, f):
-        if f in self._toasts:
-            self._toasts.remove(f)
+    def _fade_in(self, win):
         try:
-            f.destroy()
+            a = min(getattr(win, "_alpha", 0.0) + 0.12, win._goal)
+            win._alpha = a
+            win.attributes("-alpha", a)
+            if a < win._goal:
+                win.after(16, lambda: self._fade_in(win))
         except Exception:
             pass
-        self._reposition_toasts()
+
+    def _fade_out(self, win):
+        try:
+            a = getattr(win, "_alpha", 0.96) - 0.12
+            win._alpha = a
+            if a <= 0:
+                self._destroy_toast(win)
+                return
+            win.attributes("-alpha", a)
+            win.after(16, lambda: self._fade_out(win))
+        except Exception:
+            self._destroy_toast(win)
+
+    def _destroy_toast(self, win):
+        if win in self._toast_wins:
+            self._toast_wins.remove(win)
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        self._place_toasts()
 
     # ---------- progress animation ----------
     def _tick(self):
+        active = False
         if self._has_progress and self.current:
             try:
-                self._disp += (self._target - self._disp) * 0.18
-                if abs(self._target - self._disp) < 0.002:
-                    self._disp = self._target
-                self.progress.set(self._disp)
-                self.pct_lbl.configure(text="%d%%" % int(round(self._disp * 100)))
-                if self.working:
-                    self._dot = (self._dot + 1) % 48
-                    self.status_lbl.configure(text=self._status_base + "." * (1 + self._dot // 12))
+                if self.working or abs(self._target - self._disp) > 0.001:
+                    active = True
+                    self._disp += (self._target - self._disp) * 0.18
+                    if abs(self._target - self._disp) < 0.002:
+                        self._disp = self._target
+                    self.progress.set(self._disp)
+                    self.pct_lbl.configure(text="%d%%" % int(round(self._disp * 100)))
+                    if self.working:
+                        self._dot = (self._dot + 1) % 48
+                        self.status_lbl.configure(
+                            text=self._status_base + "." * (1 + self._dot // 12))
             except Exception:
                 pass
-        self.after(33, self._tick)
+        # fast frames only while animating; idle slowly so scrolling stays smooth
+        self.after(40 if active else 300, self._tick)
 
     # ---------- updates ----------
     def check_for_updates(self, silent=False):
@@ -826,7 +900,7 @@ class App(BaseTk):
                     elif ok > 0:
                         self._status_base = "Finished - %d of %d converted" % (ok, total)
                         self.status_lbl.configure(text=self._status_base, text_color=AMBER)
-                        self.show_toast("%d of %d converted" % (ok, total), "warn")
+                        self.show_toast("%d of %d converted" % (ok, total), "warn", link=GUIDE_URL)
                     else:
                         self._status_base = "Nothing converted"
                         self.status_lbl.configure(text=self._status_base, text_color=RED)
