@@ -58,7 +58,7 @@ def _read_version():
                 return v
         except Exception:
             pass
-    return "3.4.2"
+    return "3.4.3"
 
 
 APP_VERSION = _read_version()
@@ -754,6 +754,7 @@ class App(BaseTk):
         self.convert_btn.configure(state="disabled", text="Converting...")
         self.cancel_btn.pack(fill="x", padx=20, pady=(0, 8))
         files = list(self.files)
+        self._end_proc()  # clear any leftover worker before starting a new one
         started = False
         if not tool.get("office"):
             # Office (Word/Excel/PowerPoint) automation must run in the main
@@ -1068,14 +1069,29 @@ class App(BaseTk):
 
     # ---------- queue pump ----------
     def _end_proc(self):
-        try:
-            if self.proc is not None:
-                self.proc.join(timeout=0.2)
-        except Exception:
-            pass
+        p, q = self.proc, self.mpq
         self.proc = None
         self.mpq = None
         self._use_proc = False
+        if p is not None:
+            try:
+                if p.is_alive():
+                    p.join(timeout=1.0)
+                if p.is_alive():
+                    p.terminate()
+                    p.join(timeout=1.0)
+            except Exception:
+                pass
+        if q is not None:
+            # release the OS handles this queue used, so they can't pile up
+            try:
+                q.close()
+            except Exception:
+                pass
+            try:
+                q.join_thread()
+            except Exception:
+                pass
 
     def _cancel(self):
         if not self.working:
