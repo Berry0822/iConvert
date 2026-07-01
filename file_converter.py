@@ -57,7 +57,7 @@ def _read_version():
                 return v
         except Exception:
             pass
-    return "3.3.0"
+    return "3.3.1"
 
 
 APP_VERSION = _read_version()
@@ -1099,21 +1099,14 @@ class App(BaseTk):
 
 def main():
     app = App()
+    # Always open on the home page. (A right-click "Convert with iConvert"
+    # launch is the only time we jump straight to a tool.)
     files = [a for a in sys.argv[1:] if os.path.isfile(a)]
     if files:
         try:
             app.handle_launch_file(files[0])
         except Exception:
             pass
-    else:
-        last = app.settings.get("last_tool")
-        if last:
-            t = next((x for x in TOOLS if x["id"] == last), None)
-            if t:
-                try:
-                    app.show_tool(t)
-                except Exception:
-                    pass
     app.mainloop()
 
 
