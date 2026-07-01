@@ -609,3 +609,118 @@ def list_ocr_langs():
         return sorted(pytesseract.get_languages(config=""))
     except Exception:
         return []
+
+
+# ===========================================================================
+# Batch runner used both in-thread and in a separate process (never-freeze)
+# ===========================================================================
+
+def convert_one(tool, src, out_dir, opts, progress_cb=None):
+    op = tool["op"]
+    base = os.path.splitext(os.path.basename(src))[0]
+
+    def d(ext, suffix=""):
+        return unique_path(os.path.join(out_dir, base + suffix + "." + ext))
+
+    if op == "img":
+        o = d(tool["out"]); convert_image(src, o, tool["out"]); return [o]
+    if op == "img2pdf":
+        o = d("pdf"); image_to_pdf(src, o); return [o]
+    if op == "pdf2word":
+        o = d("docx"); pdf_to_word(src, o); return [o]
+    if op == "pdf2ppt":
+        o = d("pptx"); pdf_to_ppt(src, o); return [o]
+    if op == "word2pdf":
+        o = d("pdf"); word_to_pdf(src, o); return [o]
+    if op == "ppt2pdf":
+        o = d("pdf"); ppt_to_pdf(src, o); return [o]
+    if op == "excel2pdf":
+        o = d("pdf"); excel_to_pdf(src, o); return [o]
+    if op == "excel2csv":
+        return excel_to_csv(src, out_dir, base)
+    if op == "pdf2img":
+        return pdf_to_images(src, out_dir, base, tool["fmt"], progress_cb=progress_cb)
+    if op == "compress":
+        o = d("pdf", "_compressed"); pdf_compress(src, o); return [o]
+    if op == "split":
+        return pdf_split(src, out_dir, base, opts.get("pages", ""))
+    if op == "encrypt":
+        o = d("pdf", "_protected"); pdf_encrypt(src, o, opts.get("password", "")); return [o]
+    if op == "decrypt":
+        o = d("pdf", "_unlocked"); pdf_decrypt(src, o, opts.get("password", "")); return [o]
+    if op == "ocr_pdf":
+        o = d("pdf", "_ocr"); pdf_ocr(src, o, progress_cb=progress_cb); return [o]
+    if op == "ocr_word":
+        o = d("docx", "_ocr"); pdf_ocr_to_word(src, o, progress_cb=progress_cb); return [o]
+    if op == "rotate":
+        o = d("pdf", "_rotated"); pdf_rotate(src, o, opts.get("degrees", 90)); return [o]
+    if op == "delpages":
+        return pdf_delete_pages(src, out_dir, base, opts.get("pages", ""))
+    if op == "pagenum":
+        o = d("pdf", "_numbered"); pdf_add_page_numbers(src, o); return [o]
+    if op == "watermark":
+        o = d("pdf", "_watermark"); pdf_watermark(src, o, opts.get("text", "")); return [o]
+    if op == "extractimg":
+        return pdf_extract_images(src, out_dir, base)
+    if op == "resize":
+        ext = os.path.splitext(src)[1].lstrip(".").lower() or "png"
+        o = d(ext, "_small"); image_resize(src, o, opts.get("number", 1600)); return [o]
+    raise ValueError("unknown op " + op)
+
+
+def process_batch(tool, files, out_dir, opts, q):
+    """Run a whole batch, posting progress messages onto q. Safe to run in a
+    separate process (no GUI imports)."""
+    com = False
+    try:
+        import pythoncom
+        pythoncom.CoInitialize()
+        com = True
+    except Exception:
+        pass
+    ok = 0
+    total = 1
+    try:
+        if tool.get("kind") == "combine":
+            total = 1
+            q.put(("start", (1, 1, "Combining %d files" % len(files))))
+            try:
+                folder = out_dir or os.path.dirname(files[0])
+                if tool["op"] == "images_pdf":
+                    dst = unique_path(os.path.join(folder, "combined.pdf"))
+                    images_to_pdf(files, dst)
+                else:
+                    dst = unique_path(os.path.join(folder, "merged.pdf"))
+                    pdf_merge(files, dst)
+                ok = 1
+                q.put(("lastdir", folder))
+                q.put(("result", (True, "%d files" % len(files), os.path.basename(dst))))
+            except Exception as e:
+                q.put(("result", (False, tool.get("title", "combine"), str(e)[:80])))
+            q.put(("doneone", (1, 1)))
+        else:
+            total = len(files)
+            for i, src in enumerate(files, start=1):
+                q.put(("start", (i, total, os.path.basename(src))))
+
+                def cb(done, pages):
+                    q.put(("sub", (done, pages)))
+
+                try:
+                    folder = out_dir or os.path.dirname(src)
+                    outs = convert_one(tool, src, folder, opts, progress_cb=cb)
+                    ok += 1
+                    q.put(("lastdir", folder))
+                    label = (os.path.basename(outs[0]) if len(outs) == 1
+                             else "%d files" % len(outs))
+                    q.put(("result", (True, os.path.basename(src), label)))
+                except Exception as e:
+                    q.put(("result", (False, os.path.basename(src), str(e)[:80])))
+                q.put(("doneone", (i, total)))
+    finally:
+        if com:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+    q.put(("alldone", (ok, total)))

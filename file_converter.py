@@ -9,6 +9,7 @@ import sys
 import json
 import threading
 import queue
+import multiprocessing as mp
 import traceback
 import time
 import random
@@ -26,7 +27,7 @@ from converters import (
     pdf_encrypt, pdf_decrypt, pdf_ocr, pdf_ocr_to_word, tesseract_ok,
     gather_files, unique_path, is_newer,
     pdf_rotate, pdf_delete_pages, pdf_add_page_numbers, pdf_watermark,
-    pdf_extract_images, images_to_pdf, image_resize,
+    pdf_extract_images, images_to_pdf, image_resize, process_batch,
 )
 
 APP_NAME = "iConvert"
@@ -57,7 +58,7 @@ def _read_version():
                 return v
         except Exception:
             pass
-    return "3.3.1"
+    return "3.4.0"
 
 
 APP_VERSION = _read_version()
@@ -300,6 +301,10 @@ class App(BaseTk):
         self._toast_wins = []
         self._badge_cache = {}
         self._tiles = []
+        self.proc = None
+        self.mpq = None
+        self._use_proc = False
+        self._cancelled = False
 
         # progress animation state
         self._disp = 0.0
@@ -629,6 +634,10 @@ class App(BaseTk):
                                               label_text="Results", label_text_color=MUTED)
         self.results.pack(fill="both", expand=True, padx=20, pady=(0, 8))
 
+        self.cancel_btn = ctk.CTkButton(card, text="Cancel", height=34, corner_radius=9,
+                                        fg_color=SOFT, text_color=RED,
+                                        hover_color=SOFT_HOVER, command=self._cancel)
+        self.cancel_btn.pack_forget()
         self.open_btn = ctk.CTkButton(card, text="Open output folder", height=34,
                                       corner_radius=9, fg_color=GREEN,
                                       hover_color=_darken(GREEN), command=self._open_output)
@@ -741,10 +750,27 @@ class App(BaseTk):
         self.pct_lbl.configure(text="0%")
         self.status_lbl.configure(text="Starting...", text_color=MUTED)
         self.working = True
+        self._cancelled = False
         self.convert_btn.configure(state="disabled", text="Converting...")
-        threading.Thread(target=self._worker,
-                         args=(tool, list(self.files), self.output_dir, opts),
-                         daemon=True).start()
+        self.cancel_btn.pack(fill="x", padx=20, pady=(0, 8))
+        files = list(self.files)
+        started = False
+        try:
+            self.mpq = mp.Queue()
+            self.proc = mp.Process(target=process_batch,
+                                   args=(tool, files, self.output_dir, opts, self.mpq),
+                                   daemon=True)
+            self.proc.start()
+            self._use_proc = True
+            started = True
+        except Exception:
+            self._use_proc = False
+            self.proc = None
+            self.mpq = None
+        if not started:
+            threading.Thread(target=self._worker,
+                             args=(tool, files, self.output_dir, opts),
+                             daemon=True).start()
 
     def _worker(self, tool, files, out_dir, opts):
         com = False
@@ -776,6 +802,8 @@ class App(BaseTk):
         else:
             total = len(files)
             for i, src in enumerate(files, start=1):
+                if self._cancelled:
+                    break
                 self.q.put(("start", (i, total, os.path.basename(src))))
 
                 def cb(done, pages):
@@ -1035,69 +1063,116 @@ class App(BaseTk):
         save_settings(self.settings)
 
     # ---------- queue pump ----------
+    def _end_proc(self):
+        try:
+            if self.proc is not None:
+                self.proc.join(timeout=0.2)
+        except Exception:
+            pass
+        self.proc = None
+        self.mpq = None
+        self._use_proc = False
+
+    def _cancel(self):
+        if not self.working:
+            return
+        self._cancelled = True
+        if self._use_proc and self.proc is not None:
+            try:
+                self.proc.terminate()
+            except Exception:
+                pass
+            self._end_proc()
+            self.working = False
+            self.convert_btn.configure(state="normal", text="Convert")
+            if hasattr(self, "cancel_btn"):
+                self.cancel_btn.pack_forget()
+            self._status_base = "Cancelled"
+            self.status_lbl.configure(text="Cancelled", text_color=AMBER)
+            self.show_toast("Cancelled", "warn")
+
+    def _handle_msg(self, kind, payload):
+        if kind == "start":
+            i, total, name = payload
+            self._cur_i = i
+            self._cur_total = total
+            if self.current.get("kind") == "combine":
+                base = name
+            else:
+                verb = "Scanning" if self.current.get("ocr") else "Converting"
+                base = "%s %s  (%d of %d)" % (verb, name, i, total)
+            self._status_base = base
+            self.status_lbl.configure(text=base, text_color=MUTED)
+            self._target = (i - 1 + 0.6) / total
+        elif kind == "sub":
+            done, pages = payload
+            if pages:
+                self._target = (self._cur_i - 1 + done / float(pages)) / self._cur_total
+        elif kind == "doneone":
+            i, total = payload
+            self._target = i / total
+        elif kind == "lastdir":
+            self.last_out_dir = payload
+        elif kind == "result":
+            ok, left, right = payload
+            self._add_result(ok, left, right)
+            log_line(("OK   " if ok else "FAIL ") + left + " -> " + right)
+        elif kind == "alldone":
+            ok, total = payload
+            log_line("done %d/%d  [%s]" % (ok, total, self.current.get("title", "")))
+            self.working = False
+            self._target = 1.0
+            self.convert_btn.configure(state="normal", text="Convert")
+            self._end_proc()
+            if hasattr(self, "cancel_btn"):
+                self.cancel_btn.pack_forget()
+            if ok == total and ok > 0:
+                self._status_base = "Done - %d of %d converted" % (ok, total)
+                self.status_lbl.configure(text=self._status_base, text_color=GREEN)
+                self.show_toast("Done! %d file(s) converted" % ok, "success")
+            elif ok > 0:
+                self._status_base = "Finished - %d of %d converted" % (ok, total)
+                self.status_lbl.configure(text=self._status_base, text_color=AMBER)
+                self.show_toast("%d of %d converted" % (ok, total), "warn", link=GUIDE_URL)
+            else:
+                self._status_base = "Nothing converted"
+                self.status_lbl.configure(text=self._status_base, text_color=RED)
+                self.show_toast("No files were converted", "error")
+            if ok:
+                self.open_btn.pack(fill="x", padx=20, pady=(0, 14))
+                self._remember_recent(self.current,
+                                      self.last_out_dir or self.output_dir, ok)
+        elif kind == "toast":
+            self.show_toast(payload[0], payload[1])
+        elif kind == "update":
+            remote, branch = payload
+            if messagebox.askyesno(
+                    APP_NAME, "Version %s is available (you have %s).\nUpdate now?"
+                              % (remote, APP_VERSION)):
+                self._do_update(remote, branch)
+
     def _poll(self):
         try:
             while True:
                 kind, payload = self.q.get_nowait()
-                if kind == "start":
-                    i, total, name = payload
-                    self._cur_i = i
-                    self._cur_total = total
-                    if self.current.get("kind") == "combine":
-                        base = name
-                    else:
-                        verb = "Scanning" if self.current.get("ocr") else "Converting"
-                        base = "%s %s  (%d of %d)" % (verb, name, i, total)
-                    self._status_base = base
-                    self.status_lbl.configure(text=base, text_color=MUTED)
-                    self._target = (i - 1 + 0.6) / total
-                elif kind == "sub":
-                    done, pages = payload
-                    if pages:
-                        self._target = (self._cur_i - 1 + done / float(pages)) / self._cur_total
-                elif kind == "doneone":
-                    i, total = payload
-                    self._target = i / total
-                elif kind == "result":
-                    ok, left, right = payload
-                    self._add_result(ok, left, right)
-                    log_line(("OK   " if ok else "FAIL ") + left + " -> " + right)
-                elif kind == "alldone":
-                    ok, total = payload
-                    log_line("done %d/%d  [%s]" % (ok, total, self.current.get("title", "")))
-                    self.working = False
-                    self._target = 1.0
-                    self.convert_btn.configure(state="normal", text="Convert")
-                    if ok == total and ok > 0:
-                        self._status_base = "Done - %d of %d converted" % (ok, total)
-                        self.status_lbl.configure(text=self._status_base, text_color=GREEN)
-                        self.show_toast("Done! %d file(s) converted" % ok, "success")
-                    elif ok > 0:
-                        self._status_base = "Finished - %d of %d converted" % (ok, total)
-                        self.status_lbl.configure(text=self._status_base, text_color=AMBER)
-                        self.show_toast("%d of %d converted" % (ok, total), "warn", link=GUIDE_URL)
-                    else:
-                        self._status_base = "Nothing converted"
-                        self.status_lbl.configure(text=self._status_base, text_color=RED)
-                        self.show_toast("No files were converted", "error")
-                    if ok:
-                        self.open_btn.pack(fill="x", padx=20, pady=(0, 14))
-                        self._remember_recent(self.current,
-                                              self.last_out_dir or self.output_dir, ok)
-                elif kind == "toast":
-                    self.show_toast(payload[0], payload[1])
-                elif kind == "update":
-                    remote, branch = payload
-                    if messagebox.askyesno(
-                            APP_NAME, "Version %s is available (you have %s).\nUpdate now?"
-                                      % (remote, APP_VERSION)):
-                        self._do_update(remote, branch)
+                self._handle_msg(kind, payload)
         except queue.Empty:
             pass
+        if self._use_proc and self.mpq is not None:
+            try:
+                while True:
+                    kind, payload = self.mpq.get_nowait()
+                    self._handle_msg(kind, payload)
+            except queue.Empty:
+                pass
+        if (self._use_proc and self.working and self.proc is not None
+                and not self.proc.is_alive()):
+            self._handle_msg("alldone", (0, 1))
         self.after(120, self._poll)
 
 
 def main():
+    mp.freeze_support()
     app = App()
     # Always open on the home page. (A right-click "Convert with iConvert"
     # launch is the only time we jump straight to a tool.)
