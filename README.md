@@ -14,10 +14,12 @@ laptop.
 - Excel to PDF, Excel to CSV
 - JPG to PNG, PNG to JPG, Image to PDF
 - PDF to JPG, PDF to PNG (one image per page)
+- Combine images into one PDF, resize/shrink images
 
 **PDF tools**
 
 - Merge PDFs, Split PDF (pull out pages)
+- Rotate pages, delete pages, add page numbers, add a watermark, extract images
 - Compress PDF (shrink the file size)
 - Protect PDF (add a password), Unlock PDF (remove a password)
 - OCR PDF — make a scanned PDF searchable, or turn it into Word
@@ -87,5 +89,9 @@ double-click **`Add right-click menu.bat`** once. To remove it, use
 - **OCR says Tesseract is missing** — do Step 3.
 - **Word / PowerPoint / Excel conversions fail** — make sure Microsoft Office is installed and opens normally.
 - **PDF to Word looks a little off** — plain text and simple tables convert cleanly; very fancy layouts may need a small tidy-up.
+
+## Make a shareable .exe (optional)
+
+Want to give iConvert to someone who doesn't have Python? Double-click **`BUILD_EXE.bat`** once — it produces `dist\\iConvert.exe`, a single file that runs on any Windows PC with no Python needed. (OCR still needs Tesseract.) That .exe is a snapshot; the auto-update feature is for the normal Python install.
 
 Everything runs on your computer, and your files never leave your laptop.

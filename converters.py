@@ -274,18 +274,21 @@ def pdf_compress(src, dst):
     return dst
 
 
-def pdf_to_images(src, out_dir, base, fmt, dpi=150):
+def pdf_to_images(src, out_dir, base, fmt, dpi=150, progress_cb=None):
     import fitz
     ext = "jpg" if str(fmt).lower() in ("jpg", "jpeg") else "png"
     doc = fitz.open(src)
     outputs = []
     mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
     try:
+        total = doc.page_count
         for i, page in enumerate(doc):
-            pix = page.get_pixmap(matrix=mat)  # alpha=False by default
+            pix = page.get_pixmap(matrix=mat)
             p = unique_path(os.path.join(out_dir, "%s_p%d.%s" % (base, i + 1, ext)))
             pix.save(p)
             outputs.append(p)
+            if progress_cb:
+                progress_cb(i + 1, total)
     finally:
         doc.close()
     return outputs
@@ -410,7 +413,7 @@ def tesseract_ok():
         return False
 
 
-def pdf_ocr(src, dst, dpi=200):
+def pdf_ocr(src, dst, dpi=200, progress_cb=None):
     import io
     import fitz
     import pytesseract
@@ -420,13 +423,16 @@ def pdf_ocr(src, dst, dpi=200):
     out = fitz.open()
     mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
     try:
-        for page in doc:
+        total = doc.page_count
+        for i, page in enumerate(doc):
             pix = page.get_pixmap(matrix=mat)
             img = Image.open(io.BytesIO(pix.tobytes("png")))
             data = pytesseract.image_to_pdf_or_hocr(img, extension="pdf")
             sub = fitz.open("pdf", data)
             out.insert_pdf(sub)
             sub.close()
+            if progress_cb:
+                progress_cb(i + 1, total)
         out.save(dst)
     finally:
         out.close()
@@ -434,7 +440,7 @@ def pdf_ocr(src, dst, dpi=200):
     return dst
 
 
-def pdf_ocr_to_word(src, dst, dpi=200):
+def pdf_ocr_to_word(src, dst, dpi=200, progress_cb=None):
     import io
     import fitz
     import pytesseract
@@ -445,6 +451,7 @@ def pdf_ocr_to_word(src, dst, dpi=200):
     out = Document()
     mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
     try:
+        total = doc.page_count
         for i, page in enumerate(doc):
             pix = page.get_pixmap(matrix=mat)
             img = Image.open(io.BytesIO(pix.tobytes("png")))
@@ -453,7 +460,152 @@ def pdf_ocr_to_word(src, dst, dpi=200):
                 out.add_page_break()
             for line in text.splitlines():
                 out.add_paragraph(line)
+            if progress_cb:
+                progress_cb(i + 1, total)
     finally:
         doc.close()
     out.save(dst)
     return dst
+
+
+# ===========================================================================
+# v3.2 tools: rotate / delete pages / page numbers / watermark / extract
+# images / images->PDF / image resize / OCR language list
+# ===========================================================================
+
+def pdf_rotate(src, dst, degrees):
+    import fitz
+    d = int(degrees) % 360
+    doc = fitz.open(src)
+    try:
+        for page in doc:
+            page.set_rotation((page.rotation + d) % 360)
+        doc.save(dst)
+    finally:
+        doc.close()
+    return dst
+
+
+def pdf_delete_pages(src, out_dir, base, pages_spec):
+    import fitz
+    doc = fitz.open(src)
+    try:
+        n = doc.page_count
+        idxs = _parse_pages(pages_spec, n)
+        if not idxs:
+            raise ValueError("say which pages to remove, e.g. 2,5")
+        drop = set(idxs)
+        keep = [i for i in range(n) if i not in drop]
+        if not keep:
+            raise ValueError("that would remove every page")
+        doc.select(keep)
+        p = unique_path(os.path.join(out_dir, base + "_edited.pdf"))
+        doc.save(p)
+    finally:
+        doc.close()
+    return [p]
+
+
+def pdf_add_page_numbers(src, dst):
+    import fitz
+    doc = fitz.open(src)
+    try:
+        n = doc.page_count
+        for i, page in enumerate(doc, 1):
+            r = page.rect
+            page.insert_text((r.width / 2.0 - 18, r.height - 26),
+                             "%d / %d" % (i, n), fontsize=10, color=(0.35, 0.35, 0.35))
+        doc.save(dst)
+    finally:
+        doc.close()
+    return dst
+
+
+def pdf_watermark(src, dst, text):
+    import fitz
+    if not text:
+        raise ValueError("enter watermark text")
+    doc = fitz.open(src)
+    try:
+        for page in doc:
+            r = page.rect
+            page.insert_text((r.width * 0.12, r.height * 0.52), text,
+                             fontsize=44, color=(0.82, 0.82, 0.82))
+        doc.save(dst)
+    finally:
+        doc.close()
+    return dst
+
+
+def pdf_extract_images(src, out_dir, base):
+    import fitz
+    doc = fitz.open(src)
+    outs = []
+    try:
+        seen = set()
+        count = 0
+        for pno in range(doc.page_count):
+            for img in doc.get_page_images(pno):
+                xref = img[0]
+                if xref in seen:
+                    continue
+                seen.add(xref)
+                pix = fitz.Pixmap(doc, xref)
+                if pix.n - pix.alpha >= 4:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                count += 1
+                p = unique_path(os.path.join(out_dir, "%s_img%d.png" % (base, count)))
+                pix.save(p)
+                pix = None
+                outs.append(p)
+    finally:
+        doc.close()
+    if not outs:
+        raise ValueError("no embedded images found in this PDF")
+    return outs
+
+
+def images_to_pdf(srcs, dst):
+    from PIL import Image
+    imgs = []
+    for sp in srcs:
+        im = Image.open(sp)
+        imgs.append(im.convert("RGB"))
+    if not imgs:
+        raise ValueError("no images")
+    imgs[0].save(dst, "PDF", save_all=True, append_images=imgs[1:], resolution=150.0)
+    return dst
+
+
+def image_resize(src, dst, max_side):
+    from PIL import Image
+    max_side = int(max_side)
+    if max_side < 1:
+        raise ValueError("max size must be a positive number")
+    im = Image.open(src)
+    w, h = im.size
+    scale = min(1.0, float(max_side) / float(max(w, h)))
+    if scale < 1.0:
+        im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+    ext = os.path.splitext(dst)[1].lower()
+    if ext in (".jpg", ".jpeg"):
+        if im.mode in ("RGBA", "LA", "P"):
+            im = im.convert("RGBA")
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        else:
+            im = im.convert("RGB")
+        im.save(dst, "JPEG", quality=85)
+    else:
+        im.save(dst)
+    return dst
+
+
+def list_ocr_langs():
+    try:
+        import pytesseract
+        _configure_tesseract()
+        return sorted(pytesseract.get_languages(config=""))
+    except Exception:
+        return []

@@ -25,22 +25,39 @@ from converters import (
     pdf_merge, pdf_split, pdf_compress, pdf_to_images, excel_to_pdf, excel_to_csv,
     pdf_encrypt, pdf_decrypt, pdf_ocr, pdf_ocr_to_word, tesseract_ok,
     gather_files, unique_path, is_newer,
+    pdf_rotate, pdf_delete_pages, pdf_add_page_numbers, pdf_watermark,
+    pdf_extract_images, images_to_pdf, image_resize,
 )
 
 APP_NAME = "iConvert"
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(sys.executable)
+    BUNDLE_DIR = getattr(sys, "_MEIPASS", APP_DIR)
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    BUNDLE_DIR = APP_DIR
 SETTINGS_PATH = os.path.join(APP_DIR, "settings.json")
+LOG_PATH = os.path.join(APP_DIR, "iConvert.log")
+
+
+def log_line(msg):
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write("%s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except Exception:
+        pass
 
 
 def _read_version():
-    try:
-        with open(os.path.join(APP_DIR, "version.txt"), encoding="utf-8") as f:
-            v = f.read().strip()
-        if v:
-            return v
-    except Exception:
-        pass
-    return "3.1.2"
+    for base in (BUNDLE_DIR, APP_DIR):
+        try:
+            with open(os.path.join(base, "version.txt"), encoding="utf-8") as f:
+                v = f.read().strip()
+            if v:
+                return v
+        except Exception:
+            pass
+    return "3.2.0"
 
 
 APP_VERSION = _read_version()
@@ -135,6 +152,20 @@ TOOLS = [
       sub="Make scans searchable", accept={"pdf"}, kind="each", op="ocr_pdf", out="pdf", ocr=True),
     T(id="pdf_ocr_word", badge="OCR", color="#1D4ED8", title="OCR PDF to Word",
       sub="Scanned PDF into Word", accept={"pdf"}, kind="each", op="ocr_word", out="docx", ocr=True),
+    T(id="pdf_rotate", badge="PDF", color="#0E7490", title="Rotate PDF",
+      sub="Turn pages 90/180/270", accept={"pdf"}, kind="each", op="rotate", needs="rotate", out="pdf"),
+    T(id="pdf_delpages", badge="PDF", color="#B45309", title="Delete PDF pages",
+      sub="Remove pages you list", accept={"pdf"}, kind="each", op="delpages", needs="pages", out=None),
+    T(id="pdf_pagenum", badge="PDF", color="#4338CA", title="Add page numbers",
+      sub="Stamp page numbers", accept={"pdf"}, kind="each", op="pagenum", out="pdf"),
+    T(id="pdf_watermark", badge="PDF", color="#9D174D", title="Watermark PDF",
+      sub="Stamp text on pages", accept={"pdf"}, kind="each", op="watermark", needs="text", out="pdf"),
+    T(id="pdf_extract_img", badge="PDF", color="#0F766E", title="Extract images",
+      sub="Pull images out of a PDF", accept={"pdf"}, kind="each", op="extractimg", out=None),
+    T(id="img_combine", badge="IMG", color="#C2410C", title="Images to one PDF",
+      sub="Combine images into a PDF", accept={"jpg", "jpeg", "png"}, kind="combine", op="images_pdf", out="pdf"),
+    T(id="img_resize", badge="IMG", color="#7E22CE", title="Resize image",
+      sub="Shrink big images", accept={"jpg", "jpeg", "png"}, kind="each", op="resize", needs="number", out=None),
 ]
 COLS = 3
 EXT_TO_TOOL = {"doc": "word2pdf", "docx": "word2pdf", "ppt": "ppt2pdf",
@@ -142,7 +173,7 @@ EXT_TO_TOOL = {"doc": "word2pdf", "docx": "word2pdf", "ppt": "ppt2pdf",
                "jpg": "jpg2png", "jpeg": "jpg2png", "png": "png2jpg"}
 
 
-def run_one(tool, src, out_dir, opts):
+def run_one(tool, src, out_dir, opts, progress_cb=None):
     op = tool["op"]
     base = os.path.splitext(os.path.basename(src))[0]
 
@@ -166,7 +197,7 @@ def run_one(tool, src, out_dir, opts):
     if op == "excel2csv":
         return excel_to_csv(src, out_dir, base)
     if op == "pdf2img":
-        return pdf_to_images(src, out_dir, base, tool["fmt"])
+        return pdf_to_images(src, out_dir, base, tool["fmt"], progress_cb=progress_cb)
     if op == "compress":
         o = d("pdf", "_compressed"); pdf_compress(src, o); return [o]
     if op == "split":
@@ -176,9 +207,22 @@ def run_one(tool, src, out_dir, opts):
     if op == "decrypt":
         o = d("pdf", "_unlocked"); pdf_decrypt(src, o, opts.get("password", "")); return [o]
     if op == "ocr_pdf":
-        o = d("pdf", "_ocr"); pdf_ocr(src, o); return [o]
+        o = d("pdf", "_ocr"); pdf_ocr(src, o, progress_cb=progress_cb); return [o]
     if op == "ocr_word":
-        o = d("docx", "_ocr"); pdf_ocr_to_word(src, o); return [o]
+        o = d("docx", "_ocr"); pdf_ocr_to_word(src, o, progress_cb=progress_cb); return [o]
+    if op == "rotate":
+        o = d("pdf", "_rotated"); pdf_rotate(src, o, opts.get("degrees", 90)); return [o]
+    if op == "delpages":
+        return pdf_delete_pages(src, out_dir, base, opts.get("pages", ""))
+    if op == "pagenum":
+        o = d("pdf", "_numbered"); pdf_add_page_numbers(src, o); return [o]
+    if op == "watermark":
+        o = d("pdf", "_watermark"); pdf_watermark(src, o, opts.get("text", "")); return [o]
+    if op == "extractimg":
+        return pdf_extract_images(src, out_dir, base)
+    if op == "resize":
+        ext = os.path.splitext(src)[1].lstrip(".").lower() or "png"
+        o = d(ext, "_small"); image_resize(src, o, opts.get("number", 1600)); return [o]
     raise ValueError("unknown op " + op)
 
 
@@ -235,8 +279,12 @@ class App(BaseTk):
         ctk.set_default_color_theme("blue")
 
         self.title(APP_NAME + " - Local File Converter")
-        self.geometry("1000x780")
+        self.geometry(self.settings.get("geometry", "1000x780"))
         self.minsize(900, 700)
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._on_close)
+        except Exception:
+            pass
         self.configure(fg_color=PAGE)
         try:
             self.iconbitmap(resource_path("icon.ico"))
@@ -256,6 +304,8 @@ class App(BaseTk):
         self._target = 0.0
         self._dot = 0
         self._spin_angle = 0
+        self._cur_i = 1
+        self._cur_total = 1
         self._status_base = ""
         self._has_progress = False
 
@@ -271,6 +321,7 @@ class App(BaseTk):
         self.after(120, self._poll)
         self.after(33, self._tick)
         self.after(900, lambda: self.check_for_updates(silent=True))
+        self.after(700, self._whats_new)
 
     # ---------- header ----------
     def _build_header(self):
@@ -408,6 +459,8 @@ class App(BaseTk):
 
     def show_tool(self, tool):
         self.current = tool
+        self.settings["last_tool"] = tool["id"]
+        save_settings(self.settings)
         self.files = []
         accent = tool["color"]
         self._hide_all()
@@ -469,23 +522,46 @@ class App(BaseTk):
         # conditional input
         self.pages_entry = None
         self.pw_entry = None
-        if tool.get("needs") == "pages":
+        self.text_entry = None
+        self.num_entry = None
+        self.rotate_menu = None
+        need = tool.get("needs")
+        if need:
             irow = ctk.CTkFrame(card, fg_color="transparent")
             irow.pack(fill="x", padx=20, pady=(2, 2))
-            ctk.CTkLabel(irow, text="Pages", text_color=SOFT_TEXT,
-                         font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
-            self.pages_entry = ctk.CTkEntry(
-                irow, placeholder_text="e.g. 1-3,5  (blank = every page as its own file)",
-                height=32)
-            self.pages_entry.pack(side="left", fill="x", expand=True)
-        elif tool.get("needs") == "password":
-            irow = ctk.CTkFrame(card, fg_color="transparent")
-            irow.pack(fill="x", padx=20, pady=(2, 2))
-            ctk.CTkLabel(irow, text="Password", text_color=SOFT_TEXT,
-                         font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
-            self.pw_entry = ctk.CTkEntry(irow, show="*", height=32,
-                                         placeholder_text="enter password")
-            self.pw_entry.pack(side="left", fill="x", expand=True)
+            if need == "pages":
+                ctk.CTkLabel(irow, text="Pages", text_color=SOFT_TEXT,
+                             font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
+                self.pages_entry = ctk.CTkEntry(
+                    irow, height=32,
+                    placeholder_text="e.g. 1-3,5  (blank = every page as its own file)")
+                self.pages_entry.pack(side="left", fill="x", expand=True)
+            elif need == "password":
+                ctk.CTkLabel(irow, text="Password", text_color=SOFT_TEXT,
+                             font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
+                self.pw_entry = ctk.CTkEntry(irow, show="*", height=32,
+                                             placeholder_text="enter password")
+                self.pw_entry.pack(side="left", fill="x", expand=True)
+            elif need == "text":
+                ctk.CTkLabel(irow, text="Text", text_color=SOFT_TEXT,
+                             font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
+                self.text_entry = ctk.CTkEntry(
+                    irow, height=32, placeholder_text="watermark text, e.g. CONFIDENTIAL")
+                self.text_entry.pack(side="left", fill="x", expand=True)
+            elif need == "number":
+                ctk.CTkLabel(irow, text="Max size (px)", text_color=SOFT_TEXT,
+                             font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
+                self.num_entry = ctk.CTkEntry(irow, height=32, placeholder_text="e.g. 1600")
+                self.num_entry.pack(side="left", fill="x", expand=True)
+            elif need == "rotate":
+                ctk.CTkLabel(irow, text="Rotate", text_color=SOFT_TEXT,
+                             font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
+                self.rotate_menu = ctk.CTkOptionMenu(
+                    irow, values=["90 right", "180", "270 left"], width=150,
+                    fg_color=accent, button_color=_darken(accent),
+                    button_hover_color=_darken(accent, 0.75))
+                self.rotate_menu.set("90 right")
+                self.rotate_menu.pack(side="left")
 
         orow = ctk.CTkFrame(card, fg_color="transparent")
         orow.pack(fill="x", padx=20, pady=(2, 2))
@@ -605,15 +681,30 @@ class App(BaseTk):
             self.show_toast("Add some files first", "warn")
             return
         opts = {}
-        if tool.get("needs") == "pages":
+        need = tool.get("needs")
+        if need == "pages":
             opts["pages"] = self.pages_entry.get().strip()
-        if tool.get("needs") == "password":
+        elif need == "password":
             opts["password"] = self.pw_entry.get()
             if not opts["password"]:
                 self.show_toast("Enter a password first", "warn")
                 return
+        elif need == "text":
+            opts["text"] = self.text_entry.get().strip()
+            if not opts["text"]:
+                self.show_toast("Enter the watermark text", "warn")
+                return
+        elif need == "number":
+            v = self.num_entry.get().strip()
+            if not v.isdigit() or int(v) <= 0:
+                self.show_toast("Enter a size in pixels, e.g. 1600", "warn")
+                return
+            opts["number"] = int(v)
+        elif need == "rotate":
+            opts["degrees"] = {"90 right": 90, "180": 180, "270 left": 270}.get(
+                self.rotate_menu.get(), 90)
         if tool["kind"] == "combine" and len(self.files) < 2:
-            self.show_toast("Add at least 2 PDFs to merge", "warn")
+            self.show_toast("Add at least 2 files", "warn")
             return
 
         self._clear(self.results)
@@ -640,25 +731,33 @@ class App(BaseTk):
         ok = 0
         if tool["kind"] == "combine":
             total = 1
-            self.q.put(("start", (1, 1, "Merging %d files" % len(files))))
+            self.q.put(("start", (1, 1, "Combining %d files" % len(files))))
             try:
                 folder = out_dir or os.path.dirname(files[0])
-                dst = unique_path(os.path.join(folder, "merged.pdf"))
-                pdf_merge(files, dst)
+                if tool["op"] == "images_pdf":
+                    dst = unique_path(os.path.join(folder, "combined.pdf"))
+                    images_to_pdf(files, dst)
+                else:
+                    dst = unique_path(os.path.join(folder, "merged.pdf"))
+                    pdf_merge(files, dst)
                 ok = 1
                 self.last_out_dir = folder
                 self.q.put(("result", (True, "%d files" % len(files), os.path.basename(dst))))
             except Exception as e:
-                self.q.put(("result", (False, "merge", str(e)[:80])))
+                self.q.put(("result", (False, tool["title"], str(e)[:80])))
                 sys.stderr.write(traceback.format_exc() + "\n")
             self.q.put(("doneone", (1, 1)))
         else:
             total = len(files)
             for i, src in enumerate(files, start=1):
                 self.q.put(("start", (i, total, os.path.basename(src))))
+
+                def cb(done, pages):
+                    self.q.put(("sub", (done, pages)))
+
                 try:
                     folder = out_dir or os.path.dirname(src)
-                    outs = run_one(tool, src, folder, opts)
+                    outs = run_one(tool, src, folder, opts, progress_cb=cb)
                     ok += 1
                     self.last_out_dir = folder
                     label = (os.path.basename(outs[0]) if len(outs) == 1
@@ -894,6 +993,21 @@ class App(BaseTk):
         self.settings["recent"] = rec[:20]
         save_settings(self.settings)
 
+    def _on_close(self):
+        try:
+            self.settings["geometry"] = self.geometry()
+            save_settings(self.settings)
+        except Exception:
+            pass
+        self.destroy()
+
+    def _whats_new(self):
+        seen = self.settings.get("seen_version")
+        if seen and seen != APP_VERSION:
+            self.show_toast("Updated to iConvert v%s" % APP_VERSION, "success")
+        self.settings["seen_version"] = APP_VERSION
+        save_settings(self.settings)
+
     # ---------- queue pump ----------
     def _poll(self):
         try:
@@ -901,6 +1015,8 @@ class App(BaseTk):
                 kind, payload = self.q.get_nowait()
                 if kind == "start":
                     i, total, name = payload
+                    self._cur_i = i
+                    self._cur_total = total
                     if self.current.get("kind") == "combine":
                         base = name
                     else:
@@ -909,14 +1025,20 @@ class App(BaseTk):
                     self._status_base = base
                     self.status_lbl.configure(text=base, text_color=MUTED)
                     self._target = (i - 1 + 0.6) / total
+                elif kind == "sub":
+                    done, pages = payload
+                    if pages:
+                        self._target = (self._cur_i - 1 + done / float(pages)) / self._cur_total
                 elif kind == "doneone":
                     i, total = payload
                     self._target = i / total
                 elif kind == "result":
                     ok, left, right = payload
                     self._add_result(ok, left, right)
+                    log_line(("OK   " if ok else "FAIL ") + left + " -> " + right)
                 elif kind == "alldone":
                     ok, total = payload
+                    log_line("done %d/%d  [%s]" % (ok, total, self.current.get("title", "")))
                     self.working = False
                     self._target = 1.0
                     self.convert_btn.configure(state="normal", text="Convert")
@@ -957,6 +1079,15 @@ def main():
             app.handle_launch_file(files[0])
         except Exception:
             pass
+    else:
+        last = app.settings.get("last_tool")
+        if last:
+            t = next((x for x in TOOLS if x["id"] == last), None)
+            if t:
+                try:
+                    app.show_tool(t)
+                except Exception:
+                    pass
     app.mainloop()
 
 
