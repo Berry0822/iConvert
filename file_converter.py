@@ -40,7 +40,7 @@ def _read_version():
             return v
     except Exception:
         pass
-    return "3.1.0"
+    return "3.1.1"
 
 
 APP_VERSION = _read_version()
@@ -592,7 +592,7 @@ class App(BaseTk):
             return
         tool = self.current
         if tool.get("ocr") and not tesseract_ok():
-            self.show_toast("OCR needs the free Tesseract program - see README to install it.",
+            self.show_toast("Tesseract not found. Install it (guide below), then reopen iConvert.",
                             "error")
             return
         if not self.files:

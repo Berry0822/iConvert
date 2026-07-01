@@ -357,9 +357,53 @@ def pdf_decrypt(src, dst, password):
     return dst
 
 
+def _find_tesseract():
+    """Locate tesseract.exe even when it is not on PATH (the Windows installer
+    usually does NOT add it to PATH)."""
+    import shutil
+    env = os.environ.get("TESSERACT_CMD")
+    if env and os.path.isfile(env):
+        return env
+    onpath = shutil.which("tesseract")
+    if onpath:
+        return onpath
+    la = os.environ.get("LOCALAPPDATA", "")
+    roots = [
+        os.environ.get("ProgramFiles", "C:/Program Files"),
+        os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"),
+        os.path.join(la, "Programs") if la else "",
+        la,
+    ]
+    for r in roots:
+        if not r:
+            continue
+        c = os.path.join(r, "Tesseract-OCR", "tesseract.exe")
+        try:
+            if os.path.isfile(c):
+                return c
+        except Exception:
+            pass
+    return None
+
+
+def _configure_tesseract():
+    try:
+        import pytesseract
+    except Exception:
+        return None
+    path = _find_tesseract()
+    if path:
+        try:
+            pytesseract.pytesseract.tesseract_cmd = path
+        except Exception:
+            pass
+    return path
+
+
 def tesseract_ok():
     try:
         import pytesseract
+        _configure_tesseract()
         pytesseract.get_tesseract_version()
         return True
     except Exception:
@@ -371,6 +415,7 @@ def pdf_ocr(src, dst, dpi=200):
     import fitz
     import pytesseract
     from PIL import Image
+    _configure_tesseract()
     doc = fitz.open(src)
     out = fitz.open()
     mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
@@ -394,6 +439,7 @@ def pdf_ocr_to_word(src, dst, dpi=200):
     import fitz
     import pytesseract
     from PIL import Image
+    _configure_tesseract()
     from docx import Document
     doc = fitz.open(src)
     out = Document()
