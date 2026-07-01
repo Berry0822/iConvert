@@ -40,7 +40,7 @@ def _read_version():
             return v
     except Exception:
         pass
-    return "3.1.1"
+    return "3.1.2"
 
 
 APP_VERSION = _read_version()
@@ -255,6 +255,7 @@ class App(BaseTk):
         self._disp = 0.0
         self._target = 0.0
         self._dot = 0
+        self._spin_angle = 0
         self._status_base = ""
         self._has_progress = False
 
@@ -503,6 +504,11 @@ class App(BaseTk):
 
         prow = ctk.CTkFrame(card, fg_color="transparent")
         prow.pack(fill="x", padx=20)
+        _dark = ctk.get_appearance_mode() == "Dark"
+        self.spinner = tk.Canvas(prow, width=22, height=22, highlightthickness=0, bd=0,
+                                 bg="#1E293B" if _dark else "#FFFFFF")
+        self.spinner.pack(side="left", padx=(0, 8))
+        self._spin_angle = 0
         self.status_lbl = ctk.CTkLabel(prow, text="Ready to convert", text_color=MUTED,
                                        font=ctk.CTkFont(size=13))
         self.status_lbl.pack(side="left")
@@ -797,14 +803,29 @@ class App(BaseTk):
                         self._disp = self._target
                     self.progress.set(self._disp)
                     self.pct_lbl.configure(text="%d%%" % int(round(self._disp * 100)))
-                    if self.working:
-                        self._dot = (self._dot + 1) % 48
-                        self.status_lbl.configure(
-                            text=self._status_base + "." * (1 + self._dot // 12))
+                if self.working:
+                    active = True
+                    self._spin_angle = (self._spin_angle + 40) % 360
+                    self._draw_spinner(True)
+                else:
+                    self._draw_spinner(False)
             except Exception:
                 pass
         # fast frames only while animating; idle slowly so scrolling stays smooth
         self.after(40 if active else 300, self._tick)
+
+    def _draw_spinner(self, on):
+        cv = getattr(self, "spinner", None)
+        if cv is None:
+            return
+        try:
+            cv.delete("all")
+            if on:
+                col = self.current["color"] if self.current else BLUE
+                cv.create_arc(3, 3, 19, 19, start=self._spin_angle, extent=270,
+                              style="arc", outline=col, width=3)
+        except Exception:
+            pass
 
     # ---------- updates ----------
     def check_for_updates(self, silent=False):
@@ -880,8 +901,14 @@ class App(BaseTk):
                 kind, payload = self.q.get_nowait()
                 if kind == "start":
                     i, total, name = payload
-                    self._status_base = "Converting %s" % name
-                    self._target = (i - 1 + 0.85) / total
+                    if self.current.get("kind") == "combine":
+                        base = name
+                    else:
+                        verb = "Scanning" if self.current.get("ocr") else "Converting"
+                        base = "%s %s  (%d of %d)" % (verb, name, i, total)
+                    self._status_base = base
+                    self.status_lbl.configure(text=base, text_color=MUTED)
+                    self._target = (i - 1 + 0.6) / total
                 elif kind == "doneone":
                     i, total = payload
                     self._target = i / total
