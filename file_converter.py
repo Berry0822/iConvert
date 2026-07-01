@@ -58,7 +58,7 @@ def _read_version():
                 return v
         except Exception:
             pass
-    return "3.4.0"
+    return "3.4.1"
 
 
 APP_VERSION = _read_version()
@@ -120,13 +120,13 @@ TOOLS = [
     T(id="pdf2word", badge="PDF", color="#E5322D", title="PDF to Word",
       sub="PDF into editable Word", accept={"pdf"}, kind="each", op="pdf2word", out="docx"),
     T(id="word2pdf", badge="DOC", color="#2563EB", title="Word to PDF",
-      sub="Word files into PDF", accept={"doc", "docx"}, kind="each", op="word2pdf", out="pdf"),
+      sub="Word files into PDF", accept={"doc", "docx"}, kind="each", op="word2pdf", out="pdf", office=True),
     T(id="ppt2pdf", badge="PPT", color="#EA580C", title="PowerPoint to PDF",
-      sub="Slides into a PDF", accept={"ppt", "pptx"}, kind="each", op="ppt2pdf", out="pdf"),
+      sub="Slides into a PDF", accept={"ppt", "pptx"}, kind="each", op="ppt2pdf", out="pdf", office=True),
     T(id="pdf2ppt", badge="PDF", color="#DC2626", title="PDF to PowerPoint",
       sub="PDF pages into slides", accept={"pdf"}, kind="each", op="pdf2ppt", out="pptx"),
     T(id="excel2pdf", badge="XLS", color="#16A34A", title="Excel to PDF",
-      sub="Spreadsheets into PDF", accept={"xls", "xlsx"}, kind="each", op="excel2pdf", out="pdf"),
+      sub="Spreadsheets into PDF", accept={"xls", "xlsx"}, kind="each", op="excel2pdf", out="pdf", office=True),
     T(id="excel2csv", badge="XLS", color="#0D9488", title="Excel to CSV",
       sub="Each sheet into a CSV", accept={"xls", "xlsx"}, kind="each", op="excel2csv", out=None),
     T(id="jpg2png", badge="JPG", color="#0EA5E9", title="JPG to PNG",
@@ -755,19 +755,23 @@ class App(BaseTk):
         self.cancel_btn.pack(fill="x", padx=20, pady=(0, 8))
         files = list(self.files)
         started = False
-        try:
-            self.mpq = mp.Queue()
-            self.proc = mp.Process(target=process_batch,
-                                   args=(tool, files, self.output_dir, opts, self.mpq),
-                                   daemon=True)
-            self.proc.start()
-            self._use_proc = True
-            started = True
-        except Exception:
-            self._use_proc = False
-            self.proc = None
-            self.mpq = None
+        if not tool.get("office"):
+            # Office (Word/Excel/PowerPoint) automation must run in the main
+            # process; everything else runs in a background process for smoothness.
+            try:
+                self.mpq = mp.Queue()
+                self.proc = mp.Process(target=process_batch,
+                                       args=(tool, files, self.output_dir, opts, self.mpq),
+                                       daemon=True)
+                self.proc.start()
+                self._use_proc = True
+                started = True
+            except Exception:
+                self._use_proc = False
+                self.proc = None
+                self.mpq = None
         if not started:
+            self._use_proc = False
             threading.Thread(target=self._worker,
                              args=(tool, files, self.output_dir, opts),
                              daemon=True).start()
