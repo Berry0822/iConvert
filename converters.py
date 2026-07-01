@@ -109,26 +109,59 @@ def pdf_to_ppt(src, dst):
 # --- Word -> PDF (Microsoft Word via COM) ----------------------------------
 def word_to_pdf(src, dst):
     import win32com.client
-    word = win32com.client.Dispatch("Word.Application")
-    word.Visible = False
+    src = os.path.abspath(src)
+    dst = os.path.abspath(dst)
+    word = None
+    doc = None
     try:
+        word = win32com.client.DispatchEx("Word.Application")
+        try:
+            word.Visible = False
+        except Exception:
+            pass
+        try:
+            word.DisplayAlerts = 0
+        except Exception:
+            pass
         doc = word.Documents.Open(src, ReadOnly=True)
-        doc.SaveAs(dst, FileFormat=17)                 # 17 = wdFormatPDF
-        doc.Close(False)
+        doc.ExportAsFixedFormat(dst, 17)  # 17 = wdExportFormatPDF
     finally:
-        word.Quit()
+        try:
+            if doc is not None:
+                doc.Close(False)
+        except Exception:
+            pass
+        try:
+            if word is not None:
+                word.Quit()
+        except Exception:
+            pass
+    return dst
 
 
 # --- PowerPoint -> PDF (Microsoft PowerPoint via COM) ----------------------
 def ppt_to_pdf(src, dst):
     import win32com.client
-    ppt = win32com.client.Dispatch("PowerPoint.Application")
+    src = os.path.abspath(src)
+    dst = os.path.abspath(dst)
+    ppt = None
+    deck = None
     try:
+        ppt = win32com.client.DispatchEx("PowerPoint.Application")
         deck = ppt.Presentations.Open(src, WithWindow=False)
-        deck.SaveAs(dst, 32)                           # 32 = ppSaveAsPDF
-        deck.Close()
+        deck.SaveAs(dst, 32)  # 32 = ppSaveAsPDF
     finally:
-        ppt.Quit()
+        try:
+            if deck is not None:
+                deck.Close()
+        except Exception:
+            pass
+        try:
+            if ppt is not None:
+                ppt.Quit()
+        except Exception:
+            pass
+    return dst
 
 
 def route(src_ext, out_ext):
@@ -296,15 +329,33 @@ def pdf_to_images(src, out_dir, base, fmt, dpi=150, progress_cb=None):
 
 def excel_to_pdf(src, dst):
     import win32com.client
-    excel = win32com.client.Dispatch("Excel.Application")
-    excel.Visible = False
-    excel.DisplayAlerts = False
+    src = os.path.abspath(src)
+    dst = os.path.abspath(dst)
+    excel = None
+    wb = None
     try:
+        excel = win32com.client.DispatchEx("Excel.Application")
+        try:
+            excel.Visible = False
+        except Exception:
+            pass
+        try:
+            excel.DisplayAlerts = False
+        except Exception:
+            pass
         wb = excel.Workbooks.Open(src, ReadOnly=True)
         wb.ExportAsFixedFormat(0, dst)  # 0 = xlTypePDF
-        wb.Close(False)
     finally:
-        excel.Quit()
+        try:
+            if wb is not None:
+                wb.Close(False)
+        except Exception:
+            pass
+        try:
+            if excel is not None:
+                excel.Quit()
+        except Exception:
+            pass
     return dst
 
 

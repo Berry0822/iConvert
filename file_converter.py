@@ -58,7 +58,7 @@ def _read_version():
                 return v
         except Exception:
             pass
-    return "3.4.1"
+    return "3.4.2"
 
 
 APP_VERSION = _read_version()
