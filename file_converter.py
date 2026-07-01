@@ -57,7 +57,7 @@ def _read_version():
                 return v
         except Exception:
             pass
-    return "3.2.0"
+    return "3.3.0"
 
 
 APP_VERSION = _read_version()
@@ -298,6 +298,8 @@ class App(BaseTk):
         self.working = False
         self.q = queue.Queue()
         self._toast_wins = []
+        self._badge_cache = {}
+        self._tiles = []
 
         # progress animation state
         self._disp = 0.0
@@ -364,49 +366,73 @@ class App(BaseTk):
     # ---------- home ----------
     def _build_home(self):
         self.home = ctk.CTkFrame(self.body, fg_color="transparent")
-        ctk.CTkLabel(self.home, text="Every tool you need for your files",
-                     text_color=TEXT, font=ctk.CTkFont(size=22, weight="bold")
-                     ).pack(anchor="w", padx=26, pady=(18, 0))
-        ctk.CTkLabel(self.home,
-                     text="100% offline on your laptop. Pick a tool to get started.",
-                     text_color=MUTED, font=ctk.CTkFont(size=13)
-                     ).pack(anchor="w", padx=26, pady=(2, 8))
-        grid = ctk.CTkScrollableFrame(self.home, fg_color="transparent")
-        grid.pack(fill="both", expand=True, padx=18, pady=(0, 16))
+        head = ctk.CTkFrame(self.home, fg_color="transparent")
+        head.pack(fill="x", padx=26, pady=(16, 4))
+        ctk.CTkLabel(head, text="Every tool you need for your files", text_color=TEXT,
+                     font=ctk.CTkFont(size=22, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(head, text="100% offline on your laptop. Pick a tool to get started.",
+                     text_color=MUTED, font=ctk.CTkFont(size=13)).pack(anchor="w", pady=(2, 6))
+        self.search = ctk.CTkEntry(head, placeholder_text="Search tools...", height=34)
+        self.search.pack(fill="x")
+        self.search.bind("<KeyRelease>", lambda _e: self._filter_tiles())
+
+        self.grid = ctk.CTkScrollableFrame(self.home, fg_color="transparent")
+        self.grid.pack(fill="both", expand=True, padx=18, pady=(8, 16))
         for c in range(COLS):
-            grid.grid_columnconfigure(c, weight=1, uniform="tiles")
-        for i, tool in enumerate(TOOLS):
-            r, c = divmod(i, COLS)
-            self._make_tile(grid, tool).grid(row=r, column=c, padx=12, pady=12)
+            self.grid.grid_columnconfigure(c, weight=1, uniform="tiles")
+        self._tiles = []
+        for tool in TOOLS:
+            self._tiles.append((self._make_tile(self.grid, tool), tool))
+        self._filter_tiles()
 
     def _make_tile(self, parent, tool):
-        card = ctk.CTkFrame(parent, width=270, height=110, corner_radius=14,
-                            fg_color=CARD, border_width=1, border_color=TRACK)
-        card.grid_propagate(False)
-        card.pack_propagate(False)
-        badge = ctk.CTkLabel(card, text=tool["badge"], width=48, height=48,
-                             corner_radius=12, fg_color=tool["color"], text_color="white",
-                             font=ctk.CTkFont(size=14, weight="bold"))
-        badge.place(x=16, y=16)
-        title = ctk.CTkLabel(card, text=tool["title"], text_color=TEXT, anchor="w",
-                             font=ctk.CTkFont(size=15, weight="bold"))
-        title.place(x=76, y=22)
-        sub = ctk.CTkLabel(card, text=tool["sub"], text_color=MUTED, anchor="w",
-                           justify="left", wraplength=165, font=ctk.CTkFont(size=11))
-        sub.place(x=76, y=48)
+        return ctk.CTkButton(
+            parent, image=self._badge_image(tool["badge"], tool["color"]),
+            text="  " + tool["title"], compound="left", anchor="w",
+            height=58, corner_radius=14, fg_color=CARD, hover_color=SOFT,
+            text_color=TEXT, border_width=1, border_color=TRACK,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=lambda t=tool: self.show_tool(t))
 
-        def on_enter(_e): card.configure(border_color=tool["color"], border_width=2)
-        def on_leave(_e): card.configure(border_color=TRACK, border_width=1)
-        def on_click(_e): self.show_tool(tool)
-        for w in (card, badge, title, sub):
-            w.bind("<Enter>", on_enter)
-            w.bind("<Leave>", on_leave)
-            w.bind("<Button-1>", on_click)
+    def _badge_image(self, text, color):
+        key = (text, color)
+        if key in self._badge_cache:
+            return self._badge_cache[key]
+        from PIL import Image, ImageDraw, ImageFont
+        S = 40
+        img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        dr = ImageDraw.Draw(img)
+        dr.rounded_rectangle([0, 0, S - 1, S - 1], radius=11, fill=color)
+        font = None
+        for name in ("segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"):
             try:
-                w.configure(cursor="hand2")
+                font = ImageFont.truetype(name, 15)
+                break
             except Exception:
                 pass
-        return card
+        if font is None:
+            font = ImageFont.load_default()
+        bb = dr.textbbox((0, 0), text, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        dr.text(((S - tw) / 2 - bb[0], (S - th) / 2 - bb[1]), text, fill="white", font=font)
+        cimg = ctk.CTkImage(light_image=img, dark_image=img, size=(S, S))
+        self._badge_cache[key] = cimg
+        return cimg
+
+    def _filter_tiles(self):
+        try:
+            q = self.search.get().strip().lower()
+        except Exception:
+            q = ""
+        idx = 0
+        for btn, tool in self._tiles:
+            hay = (tool["title"] + " " + tool["sub"] + " " + tool["badge"]).lower()
+            if not q or q in hay:
+                r, c = divmod(idx, COLS)
+                btn.grid(row=r, column=c, padx=10, pady=8, sticky="ew")
+                idx += 1
+            else:
+                btn.grid_remove()
 
     # ---------- view switching ----------
     def _hide_all(self):
